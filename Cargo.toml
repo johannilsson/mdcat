@@ -1,0 +1,55 @@
+[package]
+name = "mdcat"
+version = "0.1.0"
+edition = "2021"
+description = "Cat for markdown - render formatted markdown with images and diagrams in the terminal"
+license = "MIT"
+
+[[bin]]
+name = "mdcat"
+path = "src/main.rs"
+
+[features]
+default = []
+network-images = ["ureq"]
+
+[dependencies]
+# Markdown parsing - full GFM AST
+comrak = "0.28"
+
+# Inline image rendering (iTerm2, Kitty, Sixel, block fallback)
+viuer = "0.9"
+
+# Syntax highlighting
+syntect = { version = "5", default-features = false, features = ["default-fancy"] }
+
+# SVG rasterization (for Mermaid output and SVG images)
+resvg = "0.44"
+tiny-skia = "0.11"
+
+# Embedded async pager
+minus = { version = "5", features = ["static_output", "search"] }
+
+# CLI argument parsing
+clap = { version = "4", features = ["derive", "env"] }
+
+# Error handling
+anyhow = "1"
+
+# Terminal size detection
+terminal_size = "0.4"
+
+# Temp files (for Mermaid mmdc subprocess)
+tempfile = "3"
+
+# Image decoding
+image = { version = "0.25", default-features = false, features = ["png", "jpeg", "gif", "webp"] }
+
+# Optional: network image fetching
+ureq = { version = "2", optional = true }
+
+[profile.release]
+opt-level = 3
+lto = true
+codegen-units = 1
+strip = true
