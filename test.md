@@ -37,12 +37,28 @@ print(greet("mdcat"))
 | Python   | Scripting   | Dynamic|
 | Haskell  | Functional  | Static |
 
+## Mermaid Diagram
+
+```mermaid
+flowchart LR
+    A([files / stdin]) --> B[input::collect]
+    B --> C[Source\nname · content · base_dir]
+    C --> D[render::render_all]
+    D --> E{TTY?}
+    E -- yes --> F{long content?}
+    F -- yes --> G[minus pager]
+    F -- no --> H[stdout]
+    E -- no --> H
+    D --> I[images::render\nviuer → stdout]
+    D --> J[mermaid::render\nmmdc → SVG → viuer → stdout]
+```
+
 ## Task List
 
 - [x] Markdown rendering
 - [x] Syntax highlighting
 - [ ] Image rendering
-- [ ] Mermaid diagrams
+- [x] Mermaid diagrams
 
 ## List
 
