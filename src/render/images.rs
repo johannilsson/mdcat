@@ -1,5 +1,5 @@
 use anyhow::{bail, Context, Result};
-use image::DynamicImage;
+use image::{DynamicImage, GenericImageView};
 use std::path::Path;
 use crate::render::Config;
 use crate::terminal::{detect_image_protocol, ImageProtocol};
@@ -7,7 +7,15 @@ use crate::terminal::{detect_image_protocol, ImageProtocol};
 /// Render an image (by URL or file path) to an ANSI/terminal-graphics string.
 pub fn render_image(url: &str, _alt: &str, base_dir: Option<&Path>, config: &Config) -> Result<String> {
     let img = load_image(url, base_dir)?;
-    render_dynamic_image(&img, config, Some(config.width))
+    let (img_px_w, _) = img.dimensions();
+    let cell_px = crate::terminal::cell_pixel_width();
+    let natural_cols = img_px_w / cell_px.max(1);
+    let max_cols = if natural_cols > config.width as u32 {
+        Some(config.width)
+    } else {
+        None
+    };
+    render_dynamic_image(&img, config, max_cols)
 }
 
 /// Render an already-decoded DynamicImage to a terminal graphics string.
