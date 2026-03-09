@@ -49,6 +49,11 @@ files/stdin → input::collect() → [Source] → render::render_all() → ANSI 
 
 **`src/main.rs`** — CLI parsing via `clap` (derive API). Pager activation logic: `--pager` flag, `--no-pager` flag, invoked-as-`mdless` detection, or auto (TTY + content exceeds terminal height).
 
+## Development guidelines
+
+- For every code change, write unit tests covering the affected logic.
+- Run `cargo test` after changes to confirm all tests pass.
+
 ## Key design decisions
 
 - **Embedded pager**: `minus` is used instead of spawning `less -R` so that terminal graphics escape sequences survive pagination intact (see ADR-0001).
