@@ -7,43 +7,52 @@ use crate::terminal::{detect_image_protocol, ImageProtocol};
 /// Render an image (by URL or file path) to an ANSI/terminal-graphics string.
 pub fn render_image(url: &str, _alt: &str, base_dir: Option<&Path>, config: &Config) -> Result<String> {
     let img = load_image(url, base_dir)?;
-    render_dynamic_image(&img, config)
+    render_dynamic_image(&img, config, Some(config.width))
 }
 
 /// Render an already-decoded DynamicImage to a terminal graphics string.
 ///
-/// Returns escape sequences that can be embedded directly in the output buffer,
-/// ensuring correct ordering relative to surrounding text.
-pub fn render_dynamic_image(img: &DynamicImage, config: &Config) -> Result<String> {
+/// `max_cols`: `Some(n)` forces the image to exactly n columns (scales up or down);
+/// `None` lets the terminal display at natural pixel size.
+pub fn render_dynamic_image(img: &DynamicImage, config: &Config, max_cols: Option<u16>) -> Result<String> {
     match detect_image_protocol(config.image_protocol.as_deref()) {
-        ImageProtocol::ITerm2 => iterm2_encode(img, config.width),
-        ImageProtocol::Kitty => kitty_encode(img, config.width),
-        ImageProtocol::Sixel | ImageProtocol::Blocks => Ok(blocks_encode(img, config.width as u32)),
+        ImageProtocol::ITerm2 => iterm2_encode(img, max_cols),
+        ImageProtocol::Kitty => kitty_encode(img, max_cols),
+        ImageProtocol::Sixel | ImageProtocol::Blocks => Ok(blocks_encode(img, max_cols.map(|c| c as u32))),
     }
 }
 
 /// Encode image as an iTerm2 OSC 1337 inline image escape sequence.
-fn iterm2_encode(img: &DynamicImage, cols: u16) -> Result<String> {
+fn iterm2_encode(img: &DynamicImage, max_cols: Option<u16>) -> Result<String> {
     use base64::{engine::general_purpose::STANDARD, Engine};
     let mut buf = Vec::new();
     img.write_to(&mut std::io::Cursor::new(&mut buf), image::ImageFormat::Png)
         .context("failed to encode image as PNG for iTerm2")?;
     let b64 = STANDARD.encode(&buf);
-    // width=N means N character columns; preserveAspectRatio=1 keeps proportions
+    let width_param = match max_cols {
+        Some(cols) => format!("width={cols};"),
+        None => String::new(),
+    };
     Ok(format!(
-        "\x1b]1337;File=inline=1;width={cols};preserveAspectRatio=1:{b64}\x07\n"
+        "\x1b]1337;File=inline=1;{width_param}preserveAspectRatio=1:{b64}\x07\n"
     ))
 }
 
 /// Encode image as a Kitty terminal graphics protocol APC sequence.
 ///
 /// Sends raw RGBA pixel data chunked in 4096-byte base64 blocks.
-/// `c={cols}` tells Kitty to scale the image to fit within that many columns.
-fn kitty_encode(img: &DynamicImage, cols: u16) -> Result<String> {
+/// If `max_cols` is Some, `c={cols}` tells Kitty to scale to that many columns.
+/// If `max_cols` is None, `c=` is omitted and Kitty displays at natural pixel size.
+fn kitty_encode(img: &DynamicImage, max_cols: Option<u16>) -> Result<String> {
     use base64::{engine::general_purpose::STANDARD, Engine};
     let rgba = img.to_rgba8();
     let (w, h) = rgba.dimensions();
     let b64 = STANDARD.encode(rgba.as_raw());
+
+    let cols_param = match max_cols {
+        Some(cols) => format!(",c={cols}"),
+        None => String::new(),
+    };
 
     let mut out = String::new();
     let chunks: Vec<&[u8]> = b64.as_bytes().chunks(4096).collect();
@@ -53,10 +62,8 @@ fn kitty_encode(img: &DynamicImage, cols: u16) -> Result<String> {
         let chunk_str = std::str::from_utf8(chunk).unwrap();
         let more = if i + 1 < total { 1 } else { 0 };
         if i == 0 {
-            // First chunk: include image metadata and display width in columns.
-            // c= tells Kitty to scale the image to fit within that many columns.
             out.push_str(&format!(
-                "\x1b_Ga=T,f=32,s={w},v={h},c={cols},q=2,m={more};{chunk_str}\x1b\\"
+                "\x1b_Ga=T,f=32,s={w},v={h}{cols_param},q=2,m={more};{chunk_str}\x1b\\"
             ));
         } else {
             out.push_str(&format!("\x1b_Gm={more};{chunk_str}\x1b\\"));
@@ -71,7 +78,7 @@ fn kitty_encode(img: &DynamicImage, cols: u16) -> Result<String> {
 /// Each terminal cell represents a 1×2 pixel block: the upper half-block (▀)
 /// uses the foreground color for the top pixel and background for the bottom.
 /// Scales the image to fit within `max_cols` character columns.
-fn blocks_encode(img: &DynamicImage, max_cols: u32) -> String {
+fn blocks_encode(img: &DynamicImage, max_cols: Option<u32>) -> String {
     use image::GenericImageView;
 
     let (orig_w, orig_h) = img.dimensions();
@@ -80,7 +87,7 @@ fn blocks_encode(img: &DynamicImage, max_cols: u32) -> String {
     }
 
     // Scale to terminal width; height halved because each cell covers 2 pixel rows
-    let target_w = max_cols.min(orig_w);
+    let target_w = max_cols.unwrap_or(orig_w).min(orig_w);
     let target_h = ((orig_h as f64 * target_w as f64 / orig_w as f64) as u32).max(2);
     let target_h = (target_h + 1) & !1; // round up to even
 
@@ -144,7 +151,8 @@ pub fn rasterize_svg(svg_data: &[u8]) -> Result<DynamicImage> {
     use resvg::usvg::{Options, Tree};
     use tiny_skia::{Pixmap, Transform};
 
-    let options = Options::default();
+    let mut options = Options::default();
+    options.fontdb_mut().load_system_fonts();
     let tree = Tree::from_data(svg_data, &options)
         .context("failed to parse SVG")?;
 

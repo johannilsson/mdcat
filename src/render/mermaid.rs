@@ -1,7 +1,7 @@
 use anyhow::{bail, Context, Result};
 use std::process::Command;
 use crate::render::Config;
-use crate::render::images::{rasterize_svg, render_dynamic_image};
+use crate::render::images::render_dynamic_image;
 
 /// Render a Mermaid diagram source string to a terminal image string.
 /// Requires `mmdc` (mermaid-cli) to be available on PATH.
@@ -22,10 +22,11 @@ pub fn render_mermaid(source: &str, config: &Config) -> Result<String> {
     std::fs::write(input_file.path(), source)
         .context("failed to write Mermaid source to temp file")?;
 
-    // Create temp file for SVG output
+    // Create temp file for PNG output — mmdc uses Chromium to render, which
+    // handles fonts correctly. This avoids resvg font issues with SVG output.
     let output_file = tempfile::Builder::new()
         .prefix("mdcat-mermaid-")
-        .suffix(".svg")
+        .suffix(".png")
         .tempfile()
         .context("failed to create temp file for Mermaid output")?;
 
@@ -35,6 +36,7 @@ pub fn render_mermaid(source: &str, config: &Config) -> Result<String> {
             "-i", input_file.path().to_str().unwrap(),
             "-o", output_file.path().to_str().unwrap(),
             "-b", "transparent",
+            "-t", "dark",
         ])
         .output()
         .with_context(|| format!("failed to run '{mmdc}'"))?;
@@ -44,19 +46,11 @@ pub fn render_mermaid(source: &str, config: &Config) -> Result<String> {
         bail!("mmdc failed: {stderr}");
     }
 
-    // Read SVG output
-    let svg_data = std::fs::read(output_file.path())
-        .context("failed to read Mermaid SVG output")?;
+    // Load PNG and render at natural size (no forced column width)
+    let img = image::open(output_file.path())
+        .context("failed to load Mermaid PNG output")?;
 
-    if svg_data.is_empty() {
-        bail!("mmdc produced empty SVG output");
-    }
-
-    // Rasterize SVG and render via viuer
-    let img = rasterize_svg(&svg_data)
-        .context("failed to rasterize Mermaid SVG")?;
-
-    render_dynamic_image(&img, config)
+    render_dynamic_image(&img, config, None)
 }
 
 /// Check if the mmdc binary exists and is executable.
