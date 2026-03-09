@@ -37,7 +37,7 @@ pub fn render_mermaid(source: &str, config: &Config) -> Result<String> {
             "-o", output_file.path().to_str().unwrap(),
             "-b", "transparent",
             "-t", "dark",
-            "-s", "2",
+            "-s", "3",
         ])
         .output()
         .with_context(|| format!("failed to run '{mmdc}'"))?;
