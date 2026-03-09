@@ -1,4 +1,4 @@
-use terminal_size::{terminal_size, Height, Width};
+use terminal_size::{terminal_size, Width};
 
 /// Detect the current terminal width, defaulting to 80.
 pub fn width() -> u16 {
@@ -7,18 +7,6 @@ pub fn width() -> u16 {
         .unwrap_or(80)
 }
 
-/// Detect the current terminal height in lines, defaulting to 24.
-pub fn height() -> u16 {
-    terminal_size()
-        .map(|(_, Height(h))| h)
-        .unwrap_or(24)
-}
-
-/// Returns true if stdout is connected to a TTY.
-pub fn is_tty() -> bool {
-    use std::io::IsTerminal;
-    std::io::stdout().is_terminal()
-}
 
 /// Returns the terminal's cell pixel width.
 ///

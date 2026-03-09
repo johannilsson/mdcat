@@ -12,7 +12,7 @@ mod terminal;
     name = "mdcat",
     about = "Cat for markdown - render formatted markdown in the terminal",
     version,
-    after_help = "When invoked as 'mdless', pager mode is enabled automatically.\n\nExamples:\n  mdcat README.md\n  mdcat file1.md file2.md\n  cat README.md | mdcat\n  mdcat --pager README.md"
+    after_help = "When invoked as 'mdless', pager mode is enabled automatically.\n\nExamples:\n  mdcat README.md\n  mdcat --pager README.md\n  cat README.md | mdcat"
 )]
 struct Cli {
     /// Files to render (reads from stdin if omitted)
@@ -21,13 +21,9 @@ struct Cli {
     #[command(subcommand)]
     command: Option<Commands>,
 
-    /// Force pager mode (like less)
-    #[arg(long, conflicts_with = "no_pager")]
-    pager: bool,
-
-    /// Disable pager mode
+    /// Enable pager mode (like less)
     #[arg(long)]
-    no_pager: bool,
+    pager: bool,
 
     /// Terminal width override (defaults to detected width or 80)
     #[arg(long, env = "COLUMNS")]
@@ -86,14 +82,7 @@ fn main() -> Result<()> {
         image_protocol: cli.image_protocol.clone(),
     };
 
-    let use_pager = if cli.no_pager {
-        false
-    } else if cli.pager || invoked_as_mdless {
-        true
-    } else {
-        // Auto: paginate if stdout is a TTY
-        terminal::is_tty()
-    };
+    let pager_forced = cli.pager || invoked_as_mdless;
 
     match &cli.command {
         Some(Commands::Completions { shell }) => {
@@ -102,32 +91,40 @@ fn main() -> Result<()> {
         }
         Some(Commands::Render { files }) => {
             let files = files.clone();
-            run(files, config, use_pager)
+            run(files, config, pager_forced)
         }
         None => {
             let files = cli.files.clone();
-            run(files, config, use_pager)
+            run(files, config, pager_forced)
         }
     }
 }
 
 fn run(files: Vec<PathBuf>, config: render::Config, use_pager: bool) -> Result<()> {
     let sources = input::collect(files)?;
-    let rendered = render::render_all(&sources, &config)?;
 
-    // The minus pager only handles CSI sequences; it strips Kitty APC and iTerm2
-    // OSC sequences, printing the raw base64 payload as text. Bypass the pager
-    // whenever a graphics protocol is in use.
-    let graphics_protocol = config.images && matches!(
+    // The minus pager only handles CSI sequences; Kitty APC and iTerm2 OSC
+    // sequences would be stripped or printed as garbage. Disable images and
+    // mermaid diagrams when using the pager so alt text / code blocks are
+    // shown instead.
+    let graphics_protocol_active = config.images && matches!(
         terminal::detect_image_protocol(config.image_protocol.as_deref()),
         terminal::ImageProtocol::Kitty | terminal::ImageProtocol::ITerm2
     );
 
-    let needs_pager = use_pager
-        && !graphics_protocol
-        && rendered.lines().count() > terminal::height() as usize;
+    let render_config = if use_pager && graphics_protocol_active {
+        render::Config {
+            images: false,
+            mermaid: false,
+            ..config
+        }
+    } else {
+        config
+    };
 
-    if needs_pager {
+    let rendered = render::render_all(&sources, &render_config)?;
+
+    if use_pager {
         pager::show(rendered)
     } else {
         print!("{}", rendered);
