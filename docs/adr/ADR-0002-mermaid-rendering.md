@@ -1,7 +1,7 @@
 # ADR-0002: Mermaid Diagram Rendering
 
 **Date**: 2026-03-08
-**Status**: Accepted
+**Status**: Superseded by ADR-0003
 
 ## Context
 
