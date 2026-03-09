@@ -17,7 +17,7 @@ pub fn render_image(url: &str, _alt: &str, base_dir: Option<&Path>, config: &Con
 pub fn render_dynamic_image(img: &DynamicImage, config: &Config) -> Result<String> {
     match detect_image_protocol(config.image_protocol.as_deref()) {
         ImageProtocol::ITerm2 => iterm2_encode(img, config.width),
-        ImageProtocol::Kitty => kitty_encode(img),
+        ImageProtocol::Kitty => kitty_encode(img, config.width),
         ImageProtocol::Sixel | ImageProtocol::Blocks => Ok(blocks_encode(img, config.width as u32)),
     }
 }
@@ -38,7 +38,8 @@ fn iterm2_encode(img: &DynamicImage, cols: u16) -> Result<String> {
 /// Encode image as a Kitty terminal graphics protocol APC sequence.
 ///
 /// Sends raw RGBA pixel data chunked in 4096-byte base64 blocks.
-fn kitty_encode(img: &DynamicImage) -> Result<String> {
+/// `c={cols}` tells Kitty to scale the image to fit within that many columns.
+fn kitty_encode(img: &DynamicImage, cols: u16) -> Result<String> {
     use base64::{engine::general_purpose::STANDARD, Engine};
     let rgba = img.to_rgba8();
     let (w, h) = rgba.dimensions();
@@ -52,9 +53,10 @@ fn kitty_encode(img: &DynamicImage) -> Result<String> {
         let chunk_str = std::str::from_utf8(chunk).unwrap();
         let more = if i + 1 < total { 1 } else { 0 };
         if i == 0 {
-            // First chunk: include image metadata
+            // First chunk: include image metadata and display width in columns.
+            // c= tells Kitty to scale the image to fit within that many columns.
             out.push_str(&format!(
-                "\x1b_Ga=T,f=32,s={w},v={h},q=2,m={more};{chunk_str}\x1b\\"
+                "\x1b_Ga=T,f=32,s={w},v={h},c={cols},q=2,m={more};{chunk_str}\x1b\\"
             ));
         } else {
             out.push_str(&format!("\x1b_Gm={more};{chunk_str}\x1b\\"));
