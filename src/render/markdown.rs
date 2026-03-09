@@ -120,7 +120,7 @@ fn render_node<'a>(
         }
 
         NodeValue::List(list) => {
-            let list_type = list.list_type.clone();
+            let list_type = list.list_type;
             let tight = list.tight;
             drop(data);
 
@@ -414,7 +414,6 @@ fn collect_text<'a>(node: &'a AstNode<'a>, output: &mut String) {
             for child in node.children() {
                 collect_text(child, output);
             }
-            return;
         }
     }
 }

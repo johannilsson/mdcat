@@ -98,7 +98,7 @@ fn main() -> Result<()> {
     match &cli.command {
         Some(Commands::Completions { shell }) => {
             completions::print_completions(shell);
-            return Ok(());
+            Ok(())
         }
         Some(Commands::Render { files }) => {
             let files = files.clone();
