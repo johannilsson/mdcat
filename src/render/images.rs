@@ -2,40 +2,107 @@ use anyhow::{bail, Context, Result};
 use image::DynamicImage;
 use std::path::Path;
 use crate::render::Config;
-use crate::terminal::detect_image_protocol;
+use crate::terminal::{detect_image_protocol, ImageProtocol};
 
 /// Render an image (by URL or file path) to an ANSI/terminal-graphics string.
-/// Returns an empty string if the image cannot be loaded or rendered.
 pub fn render_image(url: &str, _alt: &str, base_dir: Option<&Path>, config: &Config) -> Result<String> {
     let img = load_image(url, base_dir)?;
     render_dynamic_image(&img, config)
 }
 
 /// Render an already-decoded DynamicImage to a terminal graphics string.
+///
+/// Returns escape sequences that can be embedded directly in the output buffer,
+/// ensuring correct ordering relative to surrounding text.
 pub fn render_dynamic_image(img: &DynamicImage, config: &Config) -> Result<String> {
-    let protocol = detect_image_protocol(config.image_protocol.as_deref());
+    match detect_image_protocol(config.image_protocol.as_deref()) {
+        ImageProtocol::ITerm2 => iterm2_encode(img, config.width),
+        ImageProtocol::Kitty => kitty_encode(img),
+        ImageProtocol::Sixel | ImageProtocol::Blocks => Ok(blocks_encode(img, config.width as u32)),
+    }
+}
 
-    // viuer handles all protocol details; we capture its stdout output
-    // by redirecting. viuer prints directly to stdout/stderr, so we use
-    // a pipe trick: write to a temp buffer using viuer's print function.
-    //
-    // Note: viuer prints inline - we return a placeholder string here and
-    // render directly. The caller should flush this before continuing output.
-    let conf = viuer::Config {
-        absolute_offset: false,
-        width: Some(config.width as u32),
-        use_kitty: protocol == crate::terminal::ImageProtocol::Kitty,
-        use_iterm: protocol == crate::terminal::ImageProtocol::ITerm2,
-        ..Default::default()
-    };
+/// Encode image as an iTerm2 OSC 1337 inline image escape sequence.
+fn iterm2_encode(img: &DynamicImage, cols: u16) -> Result<String> {
+    use base64::{engine::general_purpose::STANDARD, Engine};
+    let mut buf = Vec::new();
+    img.write_to(&mut std::io::Cursor::new(&mut buf), image::ImageFormat::Png)
+        .context("failed to encode image as PNG for iTerm2")?;
+    let b64 = STANDARD.encode(&buf);
+    // width=N means N character columns; preserveAspectRatio=1 keeps proportions
+    Ok(format!(
+        "\x1b]1337;File=inline=1;width={cols};preserveAspectRatio=1:{b64}\x07\n"
+    ))
+}
 
-    // viuer prints directly to stdout. We signal to the caller that rendering
-    // happened by returning a sentinel; the actual output goes to stdout inline.
-    // This matches how viuer is designed to be used.
-    viuer::print(img, &conf).context("failed to render image via viuer")?;
+/// Encode image as a Kitty terminal graphics protocol APC sequence.
+///
+/// Sends raw RGBA pixel data chunked in 4096-byte base64 blocks.
+fn kitty_encode(img: &DynamicImage) -> Result<String> {
+    use base64::{engine::general_purpose::STANDARD, Engine};
+    let rgba = img.to_rgba8();
+    let (w, h) = rgba.dimensions();
+    let b64 = STANDARD.encode(rgba.as_raw());
 
-    // Return empty string - viuer has already printed to stdout
-    Ok(String::new())
+    let mut out = String::new();
+    let chunks: Vec<&[u8]> = b64.as_bytes().chunks(4096).collect();
+    let total = chunks.len();
+
+    for (i, chunk) in chunks.iter().enumerate() {
+        let chunk_str = std::str::from_utf8(chunk).unwrap();
+        let more = if i + 1 < total { 1 } else { 0 };
+        if i == 0 {
+            // First chunk: include image metadata
+            out.push_str(&format!(
+                "\x1b_Ga=T,f=32,s={w},v={h},q=2,m={more};{chunk_str}\x1b\\"
+            ));
+        } else {
+            out.push_str(&format!("\x1b_Gm={more};{chunk_str}\x1b\\"));
+        }
+    }
+    out.push('\n');
+    Ok(out)
+}
+
+/// Encode image as Unicode half-block characters with truecolor ANSI.
+///
+/// Each terminal cell represents a 1×2 pixel block: the upper half-block (▀)
+/// uses the foreground color for the top pixel and background for the bottom.
+/// Scales the image to fit within `max_cols` character columns.
+fn blocks_encode(img: &DynamicImage, max_cols: u32) -> String {
+    use image::GenericImageView;
+
+    let (orig_w, orig_h) = img.dimensions();
+    if orig_w == 0 || orig_h == 0 {
+        return String::new();
+    }
+
+    // Scale to terminal width; height halved because each cell covers 2 pixel rows
+    let target_w = max_cols.min(orig_w);
+    let target_h = ((orig_h as f64 * target_w as f64 / orig_w as f64) as u32).max(2);
+    let target_h = (target_h + 1) & !1; // round up to even
+
+    let scaled = img.resize_exact(target_w, target_h, image::imageops::FilterType::Lanczos3);
+    let rgba = scaled.to_rgba8();
+    let (w, h) = rgba.dimensions();
+
+    let mut out = String::new();
+    let mut row = 0u32;
+    while row + 1 < h {
+        for col in 0..w {
+            let top = rgba.get_pixel(col, row);
+            let bot = rgba.get_pixel(col, row + 1);
+            out.push_str(&format!(
+                "\x1b[38;2;{};{};{}m\x1b[48;2;{};{};{}m▀",
+                top[0], top[1], top[2],
+                bot[0], bot[1], bot[2],
+            ));
+        }
+        out.push_str("\x1b[0m\n");
+        row += 2;
+    }
+    out.push('\n');
+    out
 }
 
 /// Load an image from a file path or URL.
@@ -43,7 +110,7 @@ fn load_image(url: &str, base_dir: Option<&Path>) -> Result<DynamicImage> {
     if url.starts_with("http://") || url.starts_with("https://") {
         load_remote_image(url)
     } else if url.starts_with("data:") {
-        load_data_uri(url)
+        bail!("data: URI images not yet supported")
     } else {
         load_local_image(url, base_dir)
     }
@@ -62,17 +129,13 @@ fn load_local_image(url: &str, base_dir: Option<&Path>) -> Result<DynamicImage> 
     };
 
     if resolved.extension().map(|e| e.eq_ignore_ascii_case("svg")).unwrap_or(false) {
-        load_svg_file(&resolved)
+        let data = std::fs::read(&resolved)
+            .with_context(|| format!("failed to read SVG '{}'", resolved.display()))?;
+        rasterize_svg(&data)
     } else {
         image::open(&resolved)
             .with_context(|| format!("failed to open image '{}'", resolved.display()))
     }
-}
-
-fn load_svg_file(path: &Path) -> Result<DynamicImage> {
-    let data = std::fs::read(path)
-        .with_context(|| format!("failed to read SVG '{}'", path.display()))?;
-    rasterize_svg(&data)
 }
 
 pub fn rasterize_svg(svg_data: &[u8]) -> Result<DynamicImage> {
@@ -92,7 +155,6 @@ pub fn rasterize_svg(svg_data: &[u8]) -> Result<DynamicImage> {
 
     resvg::render(&tree, Transform::default(), &mut pixmap.as_mut());
 
-    // Convert tiny_skia Pixmap to image::DynamicImage
     let rgba_data = pixmap.data().to_vec();
     let img = image::RgbaImage::from_raw(width, height, rgba_data)
         .context("failed to convert pixmap to image")?;
@@ -118,8 +180,4 @@ fn load_remote_image(url: &str) -> Result<DynamicImage> {
 #[cfg(not(feature = "network-images"))]
 fn load_remote_image(url: &str) -> Result<DynamicImage> {
     bail!("network image support not compiled in (build with --features network-images): {url}")
-}
-
-fn load_data_uri(_uri: &str) -> Result<DynamicImage> {
-    bail!("data: URI images not yet supported")
 }

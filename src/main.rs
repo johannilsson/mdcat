@@ -115,10 +115,16 @@ fn run(files: Vec<PathBuf>, config: render::Config, use_pager: bool) -> Result<(
     let sources = input::collect(files)?;
     let rendered = render::render_all(&sources, &config)?;
 
-    // Only engage the pager when content actually overflows the terminal.
-    // Printing directly preserves ANSI codes reliably; the pager is only
-    // needed to scroll long output.
+    // The minus pager only handles CSI sequences; it strips Kitty APC and iTerm2
+    // OSC sequences, printing the raw base64 payload as text. Bypass the pager
+    // whenever a graphics protocol is in use.
+    let graphics_protocol = config.images && matches!(
+        terminal::detect_image_protocol(config.image_protocol.as_deref()),
+        terminal::ImageProtocol::Kitty | terminal::ImageProtocol::ITerm2
+    );
+
     let needs_pager = use_pager
+        && !graphics_protocol
         && rendered.lines().count() > terminal::height() as usize;
 
     if needs_pager {

@@ -17,8 +17,8 @@ network-images = ["ureq"]
 # Markdown parsing - full GFM AST
 comrak = "0.28"
 
-# Inline image rendering (iTerm2, Kitty, Sixel, block fallback)
-viuer = "0.9"
+# Base64 encoding for iTerm2/Kitty image protocols
+base64 = "0.22"
 
 # Syntax highlighting
 syntect = { version = "5", default-features = false, features = ["default-fancy"] }

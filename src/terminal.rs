@@ -41,7 +41,10 @@ pub fn detect_image_protocol(override_: Option<&str>) -> ImageProtocol {
     }
 
     // Kitty: $TERM=xterm-kitty
-    if std::env::var("TERM").map(|t| t == "xterm-kitty").unwrap_or(false) {
+    // Ghostty: $TERM=xterm-ghostty or $TERM_PROGRAM=ghostty (supports Kitty protocol)
+    if std::env::var("TERM").map(|t| t == "xterm-kitty" || t == "xterm-ghostty").unwrap_or(false)
+        || std::env::var("TERM_PROGRAM").map(|t| t == "ghostty").unwrap_or(false)
+    {
         return ImageProtocol::Kitty;
     }
 
