@@ -316,10 +316,9 @@ fn render_code_block(code: &str, lang: &str, config: &Config) -> String {
     out
 }
 
-fn render_table<'a>(node: &'a AstNode<'a>, output: &mut String, _config: &Config) -> Result<()> {
+fn render_table<'a>(node: &'a AstNode<'a>, output: &mut String, config: &Config) -> Result<()> {
     // Collect rows
     let mut rows: Vec<Vec<String>> = Vec::new();
-    let mut is_header_row = true;
 
     for row in node.children() {
         let mut cells: Vec<String> = Vec::new();
@@ -329,9 +328,6 @@ fn render_table<'a>(node: &'a AstNode<'a>, output: &mut String, _config: &Config
             cells.push(cell_text);
         }
         rows.push(cells);
-        if is_header_row {
-            is_header_row = false;
-        }
     }
 
     if rows.is_empty() {
@@ -345,6 +341,14 @@ fn render_table<'a>(node: &'a AstNode<'a>, output: &mut String, _config: &Config
         for (i, cell) in row.iter().enumerate() {
             col_widths[i] = col_widths[i].max(cell.len());
         }
+    }
+
+    // Total width: left border + (col_width + 2 padding) per col + separator per col + right border
+    let total_width: usize = 1 + col_widths.iter().map(|w| w + 2).sum::<usize>() + cols;
+
+    if total_width > config.width as usize {
+        render_stacked_table(&rows, output, config.width as usize);
+        return Ok(());
     }
 
     let sep: String = col_widths.iter().map(|w| "─".repeat(w + 2)).collect::<Vec<_>>().join("┼");
@@ -372,6 +376,30 @@ fn render_table<'a>(node: &'a AstNode<'a>, output: &mut String, _config: &Config
 
     output.push_str(&format!("\x1b[2m└{bot}┘\x1b[0m\n\n"));
     Ok(())
+}
+
+fn render_stacked_table(rows: &[Vec<String>], output: &mut String, width: usize) {
+    let headers = &rows[0];
+    let label_width = headers.iter().map(|h| h.len()).max().unwrap_or(0);
+
+    for (i, row) in rows[1..].iter().enumerate() {
+        let row_label = format!(" Row {} ", i + 1);
+        let dash_total = width.saturating_sub(row_label.len()).max(4);
+        let left = dash_total / 2;
+        let right = dash_total - left;
+        output.push_str(&format!(
+            "\x1b[2m{}{}{}\x1b[0m\n",
+            "─".repeat(left),
+            row_label,
+            "─".repeat(right)
+        ));
+
+        for (j, header) in headers.iter().enumerate() {
+            let value = row.get(j).map(|s| s.as_str()).unwrap_or("");
+            output.push_str(&format!("\x1b[1m{:<label_width$}\x1b[0m : {}\n", header, value));
+        }
+        output.push('\n');
+    }
 }
 
 /// Collect all plain text from a node and its children.
