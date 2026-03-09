@@ -39,6 +39,9 @@ anyhow = "1"
 # Terminal size detection
 terminal_size = "0.4"
 
+# Unix FFI for terminal pixel size queries
+libc = "0.2"
+
 # Temp files (for Mermaid mmdc subprocess)
 tempfile = "3"
 

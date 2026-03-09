@@ -18,7 +18,7 @@ pub fn render_dynamic_image(img: &DynamicImage, config: &Config, max_cols: Optio
     match detect_image_protocol(config.image_protocol.as_deref()) {
         ImageProtocol::ITerm2 => iterm2_encode(img, max_cols),
         ImageProtocol::Kitty => kitty_encode(img, max_cols),
-        ImageProtocol::Sixel | ImageProtocol::Blocks => Ok(blocks_encode(img, max_cols.map(|c| c as u32))),
+        ImageProtocol::Sixel | ImageProtocol::Blocks => Ok(blocks_encode(img, max_cols.unwrap_or(config.width) as u32)),
     }
 }
 
@@ -78,7 +78,7 @@ fn kitty_encode(img: &DynamicImage, max_cols: Option<u16>) -> Result<String> {
 /// Each terminal cell represents a 1×2 pixel block: the upper half-block (▀)
 /// uses the foreground color for the top pixel and background for the bottom.
 /// Scales the image to fit within `max_cols` character columns.
-fn blocks_encode(img: &DynamicImage, max_cols: Option<u32>) -> String {
+fn blocks_encode(img: &DynamicImage, max_cols: u32) -> String {
     use image::GenericImageView;
 
     let (orig_w, orig_h) = img.dimensions();
@@ -87,7 +87,7 @@ fn blocks_encode(img: &DynamicImage, max_cols: Option<u32>) -> String {
     }
 
     // Scale to terminal width; height halved because each cell covers 2 pixel rows
-    let target_w = max_cols.unwrap_or(orig_w).min(orig_w);
+    let target_w = max_cols.min(orig_w);
     let target_h = ((orig_h as f64 * target_w as f64 / orig_w as f64) as u32).max(2);
     let target_h = (target_h + 1) & !1; // round up to even
 

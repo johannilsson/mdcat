@@ -847,6 +847,7 @@ dependencies = [
  "clap",
  "comrak",
  "image",
+ "libc",
  "minus",
  "resvg",
  "syntect",

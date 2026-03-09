@@ -37,6 +37,7 @@ pub fn render_mermaid(source: &str, config: &Config) -> Result<String> {
             "-o", output_file.path().to_str().unwrap(),
             "-b", "transparent",
             "-t", "dark",
+            "-s", "2",
         ])
         .output()
         .with_context(|| format!("failed to run '{mmdc}'"))?;
@@ -46,11 +47,14 @@ pub fn render_mermaid(source: &str, config: &Config) -> Result<String> {
         bail!("mmdc failed: {stderr}");
     }
 
-    // Load PNG and render at natural size (no forced column width)
+    // Load PNG and render at natural size, scaling down only if wider than terminal.
     let img = image::open(output_file.path())
         .context("failed to load Mermaid PNG output")?;
 
-    render_dynamic_image(&img, config, None)
+    let cell_px = crate::terminal::cell_pixel_width();
+    let natural_cols = (img.width() / cell_px).min(u16::MAX as u32) as u16;
+    let display_cols = natural_cols.min(config.width);
+    render_dynamic_image(&img, config, Some(display_cols))
 }
 
 /// Check if the mmdc binary exists and is executable.
