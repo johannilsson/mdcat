@@ -1,6 +1,8 @@
 use anyhow::Result;
 use clap::{Parser, Subcommand};
+use std::cell::RefCell;
 use std::path::PathBuf;
+use std::rc::Rc;
 
 mod input;
 mod pager;
@@ -80,6 +82,7 @@ fn main() -> Result<()> {
         mermaid_binary: cli.mermaid_binary.clone(),
         theme: cli.theme.clone(),
         image_protocol: cli.image_protocol.clone(),
+        kitty_store: None,
     };
 
     let pager_forced = cli.pager || invoked_as_mdless;
@@ -103,12 +106,39 @@ fn main() -> Result<()> {
 fn run(files: Vec<PathBuf>, config: render::Config, use_pager: bool) -> Result<()> {
     let sources = input::collect(files)?;
 
+    let protocol = terminal::detect_image_protocol(config.image_protocol.as_deref());
+
+    // Use the Kitty pager when pager mode is requested, images are enabled,
+    // and the terminal speaks the Kitty graphics protocol (Kitty or Ghostty).
+    // This path preserves images across pagination by capturing them in a store
+    // and re-placing them with cheap APC sequences on each frame.
+    let use_kitty_pager = use_pager
+        && config.images
+        && matches!(protocol, terminal::ImageProtocol::Kitty);
+
+    if use_kitty_pager {
+        let store = Rc::new(RefCell::new(render::KittyImageStore::new()));
+        let render_config = render::Config {
+            kitty_store: Some(Rc::clone(&store)),
+            ..config
+        };
+        let rendered = render::render_all(&sources, &render_config)?;
+        let doc = render::build_kitty_document(&rendered, &store.borrow());
+        let opts = kitty_pager::PagerOptions {
+            term_width: terminal::width(),
+            term_height: terminal::height(),
+            cell_pixel_width: terminal::cell_pixel_width(),
+            cell_pixel_height: terminal::cell_pixel_height(),
+        };
+        return kitty_pager::page(doc, opts);
+    }
+
     // The minus pager only handles CSI sequences; Kitty APC and iTerm2 OSC
     // sequences would be stripped or printed as garbage. Disable images and
     // mermaid diagrams when using the pager so alt text / code blocks are
     // shown instead.
     let graphics_protocol_active = config.images && matches!(
-        terminal::detect_image_protocol(config.image_protocol.as_deref()),
+        protocol,
         terminal::ImageProtocol::Kitty | terminal::ImageProtocol::ITerm2
     );
 

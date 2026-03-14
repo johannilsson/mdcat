@@ -1,4 +1,4 @@
-use terminal_size::{terminal_size, Width};
+use terminal_size::{terminal_size, Height, Width};
 
 /// Detect the current terminal width, defaulting to 80.
 pub fn width() -> u16 {
@@ -7,6 +7,12 @@ pub fn width() -> u16 {
         .unwrap_or(80)
 }
 
+/// Detect the current terminal height, defaulting to 24.
+pub fn height() -> u16 {
+    terminal_size()
+        .map(|(_, Height(h))| h)
+        .unwrap_or(24)
+}
 
 /// Returns the terminal's cell pixel width.
 ///
@@ -15,7 +21,7 @@ pub fn width() -> u16 {
 /// TIOCGWINSZ pixel fields, then to a reasonable default of 10.
 pub fn cell_pixel_width() -> u32 {
     #[cfg(unix)]
-    if let Some(w) = query_cell_width_csi16t() {
+    if let Some((w, _)) = query_cell_size_csi16t() {
         return w;
     }
     #[cfg(unix)]
@@ -25,10 +31,23 @@ pub fn cell_pixel_width() -> u32 {
     10
 }
 
-/// Query cell pixel width using CSI 16 t escape sequence.
+/// Returns the terminal's cell pixel height.
+///
+/// Queries via CSI 16 t (Report Character Cell Size in Pixels). Falls back to 20.
+pub fn cell_pixel_height() -> u32 {
+    #[cfg(unix)]
+    if let Some((_, h)) = query_cell_size_csi16t() {
+        return h;
+    }
+    20
+}
+
+/// Query cell pixel dimensions using the CSI 16 t escape sequence.
+///
+/// Returns `(cell_px_width, cell_px_height)`.
 /// Writes to /dev/tty directly so it works even when stdout is redirected.
 #[cfg(unix)]
-fn query_cell_width_csi16t() -> Option<u32> {
+fn query_cell_size_csi16t() -> Option<(u32, u32)> {
     use std::io::{Read, Write};
     use std::os::unix::io::AsRawFd;
 
@@ -54,7 +73,7 @@ fn query_cell_width_csi16t() -> Option<u32> {
     };
 
     let result = (|| {
-        // CSI 16 t — response: ESC [ 6 ; {height} ; {width} t
+        // CSI 16 t — response: ESC [ 6 ; {height_px} ; {width_px} t
         write!(tty, "\x1b[16t").ok()?;
         tty.flush().ok()?;
 
@@ -78,9 +97,14 @@ fn query_cell_width_csi16t() -> Option<u32> {
         let s = std::str::from_utf8(&buf).ok()?;
         let s = s.strip_prefix("\x1b[6;")?;
         let s = s.strip_suffix('t')?;
-        let (_, width_str) = s.split_once(';')?;
-        let width: u32 = width_str.parse().ok()?;
-        if width > 0 { Some(width) } else { None }
+        let (height_str, width_str) = s.split_once(';')?;
+        let cell_h: u32 = height_str.parse().ok()?;
+        let cell_w: u32 = width_str.parse().ok()?;
+        if cell_w > 0 && cell_h > 0 {
+            Some((cell_w, cell_h))
+        } else {
+            None
+        }
     })();
 
     unsafe { libc::tcsetattr(fd, libc::TCSANOW, &saved) };

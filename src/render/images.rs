@@ -22,7 +22,18 @@ pub fn render_image(url: &str, _alt: &str, base_dir: Option<&Path>, config: &Con
 ///
 /// `max_cols`: `Some(n)` forces the image to exactly n columns (scales up or down);
 /// `None` lets the terminal display at natural pixel size.
+///
+/// When `config.kitty_store` is `Some`, the image is stored in the store and a
+/// sentinel placeholder is returned instead of a live escape sequence.  This
+/// allows the Kitty pager to reconstruct an image-aware document after rendering.
 pub fn render_dynamic_image(img: &DynamicImage, config: &Config, max_cols: Option<u16>) -> Result<String> {
+    if let Some(store) = &config.kitty_store {
+        let rgba = img.to_rgba8();
+        let (pw, ph) = rgba.dimensions();
+        let cols = max_cols.unwrap_or(0);
+        let id = store.borrow_mut().push(rgba.into_raw(), pw, ph, max_cols);
+        return Ok(format!("\x00KITTY:{id}:{cols}:{pw}:{ph}\x00\n"));
+    }
     match detect_image_protocol(config.image_protocol.as_deref()) {
         ImageProtocol::ITerm2 => iterm2_encode(img, max_cols),
         ImageProtocol::Kitty => kitty_encode(img, max_cols),
