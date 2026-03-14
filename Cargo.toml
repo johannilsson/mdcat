@@ -1,3 +1,7 @@
+[workspace]
+members = ["kitty-pager"]
+resolver = "2"
+
 [package]
 name = "mdcat"
 version = "0.1.0"
@@ -14,6 +18,9 @@ default = []
 network-images = ["ureq"]
 
 [dependencies]
+# Kitty pager (workspace sibling)
+kitty-pager = { path = "kitty-pager" }
+
 # Markdown parsing - full GFM AST
 comrak = "0.28"
 
