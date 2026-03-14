@@ -145,7 +145,7 @@ pub(crate) fn render_frame(
         ((top_entry + 1) * 100 / total).min(100)
     };
     out.push_str(&format!(
-        "\x1b[{row};1H\x1b[2K\x1b[7m-- {pct}% -- (j/k scroll, q quit)\x1b[0m",
+        "\x1b[{row};1H\x1b[2K\x1b[7m {pct}%\x1b[0m",
         row = screen_rows
     ));
 
@@ -285,8 +285,7 @@ mod tests {
         let entries = layout(&doc, 16);
         let mut transmitted = HashSet::new();
         let frame = render_frame(&doc, &entries, 0, 24, 16, &mut transmitted);
-        assert!(frame.contains("-- "));
-        assert!(frame.contains("(j/k scroll, q quit)"));
+        assert!(frame.contains("\x1b[7m "));
     }
 
     #[test]

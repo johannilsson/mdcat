@@ -69,12 +69,12 @@ fn event_loop(
                     (KeyCode::Char('k'), _) | (KeyCode::Up, _) => {
                         top_entry = top_entry.saturating_sub(1);
                     }
-                    (KeyCode::Char('f'), _)
-                    | (KeyCode::PageDown, _)
-                    | (KeyCode::Char(' '), _) => {
+                    (KeyCode::Char('d'), KeyModifiers::CONTROL)
+                    | (KeyCode::PageDown, _) => {
                         top_entry = (top_entry + page_size).min(max_top);
                     }
-                    (KeyCode::Char('b'), _) | (KeyCode::PageUp, _) => {
+                    (KeyCode::Char('b'), KeyModifiers::CONTROL)
+                    | (KeyCode::PageUp, _) => {
                         top_entry = top_entry.saturating_sub(page_size);
                     }
                     (KeyCode::Home, _) | (KeyCode::Char('g'), _) => {

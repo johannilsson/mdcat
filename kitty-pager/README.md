@@ -18,8 +18,8 @@ The pager then:
 |-----|--------|
 | `j` / Down | Scroll down one row |
 | `k` / Up | Scroll up one row |
-| `f` / Space / PageDown | Scroll down one page |
-| `b` / PageUp | Scroll up one page |
+| Ctrl+D / PageDown | Scroll down one page |
+| Ctrl+B / PageUp | Scroll up one page |
 | `g` / Home | Go to top |
 | `G` / End | Go to bottom |
 | `q` / `Q` / Esc / Ctrl-C | Quit |
