@@ -1,5 +1,6 @@
 use base64::{engine::general_purpose::STANDARD, Engine};
 use std::collections::HashSet;
+use std::io::Write;
 
 use crate::document::{DocItem, KittyDocument};
 
@@ -73,6 +74,17 @@ pub(crate) fn layout(doc: &KittyDocument, cell_px_width: u32, cell_px_height: u3
     entries
 }
 
+/// Open the debug log file if `MDCAT_DEBUG_FRAMES` is set.
+fn debug_log() -> Option<std::fs::File> {
+    std::env::var_os("MDCAT_DEBUG_FRAMES").and_then(|_| {
+        std::fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open("/tmp/mdcat-frames.log")
+            .ok()
+    })
+}
+
 /// Render a full screen frame to a `String`.
 ///
 /// Images are placed with source-rectangle cropping (`y=`, `r=`) so that
@@ -100,6 +112,11 @@ pub(crate) fn render_frame(
     // their continuation rows.
     let mut placed_images: HashSet<usize> = HashSet::new();
 
+    let mut dbg = debug_log();
+    if let Some(ref mut f) = dbg {
+        let _ = writeln!(f, "--- Frame top_entry={top_entry} screen_rows={screen_rows} max_content={max_content_rows} ---");
+    }
+
     for entry in layout.iter().skip(top_entry) {
         if rows_rendered >= max_content_rows {
             break;
@@ -107,6 +124,10 @@ pub(crate) fn render_frame(
 
         match &entry.kind {
             EntryKind::Text(line) => {
+                if let Some(ref mut f) = dbg {
+                    let preview: String = line.chars().take(60).collect();
+                    let _ = writeln!(f, "[row {rows_rendered}] Text: \"{preview}\"");
+                }
                 out.push_str(line);
                 out.push_str("\x1b[K\r\n");
                 rows_rendered += 1;
@@ -144,16 +165,44 @@ pub(crate) fn render_frame(
                     let needs_crop =
                         *row_in_image > 0 || visible_rows < *total_rows;
 
+                    if let Some(ref mut f) = dbg {
+                        let _ = writeln!(
+                            f,
+                            "[row {rows_rendered}] Image id={} row_in_image={} total_rows={} visible_rows={}\n\
+                             \x20        pixel: {}x{} display_cols={:?} cell={}x{}\n\
+                             \x20        crop: y={} h={} needs_crop={}\n\
+                             \x20        cursor_pos_after: row {} (absolute)",
+                            img.id, row_in_image, total_rows, visible_rows,
+                            img.pixel_width, img.pixel_height, img.display_cols, cell_px_width, cell_px_height,
+                            crop_top_px, src_h, needs_crop,
+                            rows_rendered + visible_rows + 1,
+                        );
+                    }
+
+                    // Clear every row the image will occupy.  Kitty
+                    // images are virtual overlays — they float on top of
+                    // the text grid.  Without clearing, text from a
+                    // previous frame bleeds through under the image.
+                    for r in 0..visible_rows {
+                        let clear_row = rows_rendered + r + 1; // 1-based
+                        out.push_str(&format!("\x1b[{clear_row};1H\x1b[K"));
+                    }
+                    // Return cursor to image start row for placement.
+                    let img_row = rows_rendered + 1; // 1-based
+                    out.push_str(&format!("\x1b[{img_row};1H"));
+
                     if transmitted.contains(&img.id) {
-                        out.push_str(&kitty_place(img, needs_crop, crop_top_px, src_h));
+                        out.push_str(&kitty_place(img, needs_crop, crop_top_px, src_h, visible_rows));
                     } else {
-                        out.push_str(&kitty_transmit(img, needs_crop, crop_top_px, src_h));
+                        out.push_str(&kitty_transmit(img, needs_crop, crop_top_px, src_h, visible_rows));
                         transmitted.insert(img.id);
                     }
 
-                    out.push_str("\r\n");
                     placed_images.insert(entry.item_idx);
                     rows_rendered += visible_rows;
+                    // Position cursor at the row after the image.
+                    let next_row = rows_rendered + 1; // 1-based
+                    out.push_str(&format!("\x1b[{next_row};1H"));
                 }
             }
         }
@@ -190,13 +239,14 @@ fn kitty_place(
     crop: bool,
     crop_top_px: u32,
     src_height_px: u32,
+    visible_rows: u32,
 ) -> String {
     let cols = img
         .display_cols
         .map(|c| format!(",c={c}"))
         .unwrap_or_default();
     let crop_params = if crop {
-        format!(",y={crop_top_px},h={src_height_px}")
+        format!(",y={crop_top_px},h={src_height_px},r={visible_rows}")
     } else {
         String::new()
     };
@@ -216,6 +266,7 @@ fn kitty_transmit(
     crop: bool,
     crop_top_px: u32,
     src_height_px: u32,
+    visible_rows: u32,
 ) -> String {
     let b64 = STANDARD.encode(&img.rgba_data);
     let cols = img
@@ -223,7 +274,7 @@ fn kitty_transmit(
         .map(|c| format!(",c={c}"))
         .unwrap_or_default();
     let crop_params = if crop {
-        format!(",y={crop_top_px},h={src_height_px}")
+        format!(",y={crop_top_px},h={src_height_px},r={visible_rows}")
     } else {
         String::new()
     };
@@ -389,9 +440,11 @@ mod tests {
         let mut transmitted = HashSet::new();
         // Skip the first image row (top_entry=1 → row_in_image=1).
         let frame = render_frame(&doc, &entries, 1, 24, 8, 16, &mut transmitted);
-        // Should transmit with y=16 (1 row * 16px) and h=32 (2 visible rows × 16px).
+        // Should transmit with y=16 (1 row * 16px), h=32 (2 visible rows × 16px),
+        // and r=2 (2 visible display rows).
         assert!(frame.contains("y=16"));
         assert!(frame.contains("h=32"));
+        assert!(frame.contains("r=2"));
     }
 
     #[test]
@@ -420,6 +473,7 @@ mod tests {
         let frame = render_frame(&doc, &entries, 1, 51, 9, 18, &mut transmitted);
         assert!(frame.contains("y=30"), "expected y=30 in frame");
         assert!(frame.contains("h=1470"), "expected h=1470 in frame");
+        assert!(frame.contains("r=49"), "expected r=49 in frame");
     }
 
     #[test]
@@ -439,5 +493,6 @@ mod tests {
         // Screen is 3 rows: 2 content + 1 status.  Image needs 3 rows → clipped to 2.
         let frame = render_frame(&doc, &entries, 0, 3, 8, 16, &mut transmitted);
         assert!(frame.contains("h=32"));
+        assert!(frame.contains("r=2"));
     }
 }
