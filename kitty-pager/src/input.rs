@@ -54,8 +54,9 @@ fn event_loop(
     loop {
         match event::read()? {
             Event::Key(KeyEvent { code, modifiers, .. }) => {
-                let page_size = (screen_rows as usize).saturating_sub(2).max(1);
                 let max_top = entries.len().saturating_sub(1);
+                let half_page = (screen_rows as usize).saturating_sub(2).max(1) / 2;
+                let full_page = (screen_rows as usize).saturating_sub(2).max(1);
 
                 match (code, modifiers) {
                     (KeyCode::Char('q'), _)
@@ -69,13 +70,17 @@ fn event_loop(
                     (KeyCode::Char('k'), _) | (KeyCode::Up, _) => {
                         top_entry = top_entry.saturating_sub(1);
                     }
-                    (KeyCode::Char('d'), KeyModifiers::CONTROL)
-                    | (KeyCode::PageDown, _) => {
-                        top_entry = (top_entry + page_size).min(max_top);
+                    (KeyCode::Char('d'), KeyModifiers::CONTROL) => {
+                        top_entry = (top_entry + half_page).min(max_top);
                     }
-                    (KeyCode::Char('b'), KeyModifiers::CONTROL)
-                    | (KeyCode::PageUp, _) => {
-                        top_entry = top_entry.saturating_sub(page_size);
+                    (KeyCode::Char('b'), KeyModifiers::CONTROL) => {
+                        top_entry = top_entry.saturating_sub(half_page);
+                    }
+                    (KeyCode::PageDown, _) => {
+                        top_entry = (top_entry + full_page).min(max_top);
+                    }
+                    (KeyCode::PageUp, _) => {
+                        top_entry = top_entry.saturating_sub(full_page);
                     }
                     (KeyCode::Home, _) | (KeyCode::Char('g'), _) => {
                         top_entry = 0;
