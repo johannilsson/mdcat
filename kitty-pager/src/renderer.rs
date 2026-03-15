@@ -26,8 +26,13 @@ pub(crate) enum EntryKind {
 /// Text items are split on `\n`; each line becomes one `LayoutEntry`.
 /// Image items are expanded into one entry **per terminal row** so that
 /// scrolling is row-granular and partial images can be displayed.
-pub(crate) fn layout(doc: &KittyDocument, cell_px_height: u32) -> Vec<LayoutEntry> {
+///
+/// Both `cell_px_width` and `cell_px_height` are needed because images with
+/// `display_cols` set are scaled by the terminal — the displayed pixel height
+/// depends on the scale factor derived from `display_cols * cell_px_width`.
+pub(crate) fn layout(doc: &KittyDocument, cell_px_width: u32, cell_px_height: u32) -> Vec<LayoutEntry> {
     let cell_h = cell_px_height.max(1);
+    let cell_w = cell_px_width.max(1);
     let mut entries = Vec::new();
 
     for (idx, item) in doc.items.iter().enumerate() {
@@ -41,7 +46,18 @@ pub(crate) fn layout(doc: &KittyDocument, cell_px_height: u32) -> Vec<LayoutEntr
                 }
             }
             DocItem::Image(img) => {
-                let total_rows = img.pixel_height.div_ceil(cell_h).max(1);
+                // When display_cols is set, the Kitty terminal scales the
+                // image to that many columns (preserving aspect ratio).
+                // We must compute the displayed pixel height after scaling
+                // so the layout row count matches what the terminal renders.
+                let displayed_height = if let Some(cols) = img.display_cols {
+                    let display_width_px = cols as u32 * cell_w;
+                    let pw = img.pixel_width.max(1);
+                    ((img.pixel_height as u64 * display_width_px as u64) / pw as u64) as u32
+                } else {
+                    img.pixel_height
+                };
+                let total_rows = displayed_height.div_ceil(cell_h).max(1);
                 for row in 0..total_rows {
                     entries.push(LayoutEntry {
                         item_idx: idx,
@@ -67,6 +83,7 @@ pub(crate) fn render_frame(
     layout: &[LayoutEntry],
     top_entry: usize,
     screen_rows: u16,
+    cell_px_width: u32,
     cell_px_height: u32,
     transmitted: &mut HashSet<u32>,
 ) -> String {
@@ -109,23 +126,48 @@ pub(crate) fn render_frame(
                     let remaining_screen = max_content_rows - rows_rendered;
                     let visible_rows = remaining_image.min(remaining_screen);
 
-                    let crop_top_px = row_in_image * cell_px_height;
+                    // When display_cols is set the terminal scales the image,
+                    // so source-pixel coordinates differ from display-pixel
+                    // coordinates.  Scale crop values by pixel_width /
+                    // (display_cols * cell_px_width) to convert display→source.
+                    let (crop_top_px, raw_src_h) = if let Some(cols) = img.display_cols {
+                        let display_w = cols as u64 * cell_px_width as u64;
+                        let pw = img.pixel_width as u64;
+                        let top = (*row_in_image as u64 * cell_px_height as u64 * pw / display_w) as u32;
+                        let h = (visible_rows as u64 * cell_px_height as u64 * pw / display_w) as u32;
+                        (top, h)
+                    } else {
+                        (row_in_image * cell_px_height, visible_rows * cell_px_height)
+                    };
                     // Clamp source height to actual remaining pixels.
-                    let src_h = (visible_rows * cell_px_height)
-                        .min(img.pixel_height.saturating_sub(crop_top_px));
+                    let src_h = raw_src_h.min(img.pixel_height.saturating_sub(crop_top_px));
                     let needs_crop =
                         *row_in_image > 0 || visible_rows < *total_rows;
 
+                    // Clear every row the image will occupy.  Kitty
+                    // images are virtual overlays — they float on top of
+                    // the text grid.  Without clearing, text from a
+                    // previous frame bleeds through under the image.
+                    for r in 0..visible_rows {
+                        let clear_row = rows_rendered + r + 1; // 1-based
+                        out.push_str(&format!("\x1b[{clear_row};1H\x1b[K"));
+                    }
+                    // Return cursor to image start row for placement.
+                    let img_row = rows_rendered + 1; // 1-based
+                    out.push_str(&format!("\x1b[{img_row};1H"));
+
                     if transmitted.contains(&img.id) {
-                        out.push_str(&kitty_place(img, needs_crop, crop_top_px, src_h));
+                        out.push_str(&kitty_place(img, needs_crop, crop_top_px, src_h, visible_rows));
                     } else {
-                        out.push_str(&kitty_transmit(img, needs_crop, crop_top_px, src_h));
+                        out.push_str(&kitty_transmit(img, needs_crop, crop_top_px, src_h, visible_rows));
                         transmitted.insert(img.id);
                     }
 
-                    out.push_str("\r\n");
                     placed_images.insert(entry.item_idx);
                     rows_rendered += visible_rows;
+                    // Position cursor at the row after the image.
+                    let next_row = rows_rendered + 1; // 1-based
+                    out.push_str(&format!("\x1b[{next_row};1H"));
                 }
             }
         }
@@ -162,13 +204,14 @@ fn kitty_place(
     crop: bool,
     crop_top_px: u32,
     src_height_px: u32,
+    visible_rows: u32,
 ) -> String {
     let cols = img
         .display_cols
         .map(|c| format!(",c={c}"))
         .unwrap_or_default();
     let crop_params = if crop {
-        format!(",y={crop_top_px},h={src_height_px}")
+        format!(",y={crop_top_px},h={src_height_px},r={visible_rows}")
     } else {
         String::new()
     };
@@ -188,6 +231,7 @@ fn kitty_transmit(
     crop: bool,
     crop_top_px: u32,
     src_height_px: u32,
+    visible_rows: u32,
 ) -> String {
     let b64 = STANDARD.encode(&img.rgba_data);
     let cols = img
@@ -195,7 +239,7 @@ fn kitty_transmit(
         .map(|c| format!(",c={c}"))
         .unwrap_or_default();
     let crop_params = if crop {
-        format!(",y={crop_top_px},h={src_height_px}")
+        format!(",y={crop_top_px},h={src_height_px},r={visible_rows}")
     } else {
         String::new()
     };
@@ -234,7 +278,7 @@ mod tests {
     #[test]
     fn layout_text_splits_on_newlines() {
         let doc = make_doc(vec![DocItem::Text("line1\nline2\nline3".to_string())]);
-        let entries = layout(&doc, 16);
+        let entries = layout(&doc, 8, 16);
         assert_eq!(entries.len(), 3);
     }
 
@@ -249,7 +293,7 @@ mod tests {
         };
         let doc = make_doc(vec![DocItem::Image(img)]);
         // 35 / 16 = 2.1875 → ceil = 3 → 3 layout entries
-        let entries = layout(&doc, 16);
+        let entries = layout(&doc, 8, 16);
         assert_eq!(entries.len(), 3);
         for (i, e) in entries.iter().enumerate() {
             match &e.kind {
@@ -275,25 +319,46 @@ mod tests {
             display_cols: None,
         };
         let doc = make_doc(vec![DocItem::Image(img)]);
-        let entries = layout(&doc, 16);
+        let entries = layout(&doc, 8, 16);
         assert_eq!(entries.len(), 1);
+    }
+
+    #[test]
+    fn layout_image_accounts_for_display_cols_scaling() {
+        // Image: 3000×1500px (e.g. mermaid at 3x scale), display_cols=200.
+        // cell_px_width=9, cell_px_height=18.
+        // display_width_px = 200 * 9 = 1800
+        // displayed_height = 1500 * 1800 / 3000 = 900
+        // total_rows = ceil(900 / 18) = 50
+        //
+        // Without the fix, raw pixel_height would give ceil(1500/18) = 84 rows.
+        let img = KittyImage {
+            id: 10,
+            rgba_data: vec![0u8; 4 * 3000 * 1500],
+            pixel_width: 3000,
+            pixel_height: 1500,
+            display_cols: Some(200),
+        };
+        let doc = make_doc(vec![DocItem::Image(img)]);
+        let entries = layout(&doc, 9, 18);
+        assert_eq!(entries.len(), 50);
     }
 
     #[test]
     fn render_frame_contains_status_bar() {
         let doc = make_doc(vec![DocItem::Text("hello".to_string())]);
-        let entries = layout(&doc, 16);
+        let entries = layout(&doc, 8, 16);
         let mut transmitted = HashSet::new();
-        let frame = render_frame(&doc, &entries, 0, 24, 16, &mut transmitted);
+        let frame = render_frame(&doc, &entries, 0, 24, 8, 16, &mut transmitted);
         assert!(frame.contains("\x1b[7m "));
     }
 
     #[test]
     fn render_frame_no_screen_clear() {
         let doc = make_doc(vec![DocItem::Text("hello".to_string())]);
-        let entries = layout(&doc, 16);
+        let entries = layout(&doc, 8, 16);
         let mut transmitted = HashSet::new();
-        let frame = render_frame(&doc, &entries, 0, 24, 16, &mut transmitted);
+        let frame = render_frame(&doc, &entries, 0, 24, 8, 16, &mut transmitted);
         assert!(!frame.contains("\x1b[2J"));
         assert!(frame.contains("a=d,d=a"));
         assert!(frame.contains("\x1b[H"));
@@ -309,39 +374,71 @@ mod tests {
             display_cols: None,
         };
         let doc = make_doc(vec![DocItem::Image(img)]);
-        let entries = layout(&doc, 16);
+        let entries = layout(&doc, 8, 16);
         let mut transmitted = HashSet::new();
 
-        let frame = render_frame(&doc, &entries, 0, 24, 16, &mut transmitted);
+        let frame = render_frame(&doc, &entries, 0, 24, 8, 16, &mut transmitted);
         assert!(frame.contains("a=T"));
         assert!(transmitted.contains(&42));
 
-        let frame2 = render_frame(&doc, &entries, 0, 24, 16, &mut transmitted);
+        let frame2 = render_frame(&doc, &entries, 0, 24, 8, 16, &mut transmitted);
         assert!(frame2.contains("a=p,i=42"));
         assert!(!frame2.contains("a=T"));
     }
 
     #[test]
     fn render_frame_partial_image_top_cropped() {
-        // Image is 48px tall / 16px per cell = 3 rows.
+        // Image: 80×48px, display_cols=10, cell 8×16px.
+        // Displayed height = 48 * (10*8) / 80 = 48px → ceil(48/16) = 3 rows.
         // Start at row 1 (skip first row) → should crop y=16.
         let img = KittyImage {
             id: 7,
-            rgba_data: vec![0u8; 4 * 4 * 48],
-            pixel_width: 4,
+            rgba_data: vec![0u8; 4 * 80 * 48],
+            pixel_width: 80,
             pixel_height: 48,
             display_cols: Some(10),
         };
         let doc = make_doc(vec![DocItem::Image(img)]);
-        let entries = layout(&doc, 16);
+        let entries = layout(&doc, 8, 16);
         assert_eq!(entries.len(), 3); // 3 rows
 
         let mut transmitted = HashSet::new();
         // Skip the first image row (top_entry=1 → row_in_image=1).
-        let frame = render_frame(&doc, &entries, 1, 24, 16, &mut transmitted);
-        // Should transmit with y=16 (1 row * 16px) and h=32 (2 visible rows × 16px).
+        let frame = render_frame(&doc, &entries, 1, 24, 8, 16, &mut transmitted);
+        // Should transmit with y=16 (1 row * 16px), h=32 (2 visible rows × 16px),
+        // and r=2 (2 visible display rows).
         assert!(frame.contains("y=16"));
         assert!(frame.contains("h=32"));
+        assert!(frame.contains("r=2"));
+    }
+
+    #[test]
+    fn render_frame_scaled_image_crop_coordinates() {
+        // Image: 3000×1500px, display_cols=200, cell 9×18px.
+        // Scale factor = display_w / pixel_w = 1800 / 3000 = 0.6
+        // Inverse scale = 3000 / 1800 = 5/3
+        // Displayed height = 1500 * 1800 / 3000 = 900px → 50 rows.
+        //
+        // Scrolling to row 1:
+        //   crop_top = 1 * 18 * 3000 / 1800 = 30
+        //   src_h    = 49 * 18 * 3000 / 1800 = 1470
+        // (screen 51 rows → 50 content rows → 49 visible from row 1)
+        let img = KittyImage {
+            id: 20,
+            rgba_data: vec![0u8; 4 * 3000 * 1500],
+            pixel_width: 3000,
+            pixel_height: 1500,
+            display_cols: Some(200),
+        };
+        let doc = make_doc(vec![DocItem::Image(img)]);
+        let entries = layout(&doc, 9, 18);
+        assert_eq!(entries.len(), 50);
+
+        let mut transmitted = HashSet::new();
+        let frame = render_frame(&doc, &entries, 1, 51, 9, 18, &mut transmitted);
+        assert!(frame.contains("y=30"), "expected y=30 in frame");
+        assert!(frame.contains("h=1470"), "expected h=1470 in frame");
+        assert!(frame.contains("r=49"), "expected r=49 in frame");
     }
 
     #[test]
@@ -355,11 +452,53 @@ mod tests {
             display_cols: None,
         };
         let doc = make_doc(vec![DocItem::Image(img)]);
-        let entries = layout(&doc, 16);
+        let entries = layout(&doc, 8, 16);
 
         let mut transmitted = HashSet::new();
         // Screen is 3 rows: 2 content + 1 status.  Image needs 3 rows → clipped to 2.
-        let frame = render_frame(&doc, &entries, 0, 3, 16, &mut transmitted);
+        let frame = render_frame(&doc, &entries, 0, 3, 8, 16, &mut transmitted);
         assert!(frame.contains("h=32"));
+        assert!(frame.contains("r=2"));
+    }
+
+    #[test]
+    fn render_frame_clears_rows_under_image() {
+        // Text (5 lines) followed by an image (3 rows at 48px / 16px cell).
+        // With a 10-row screen (9 content + 1 status), the image starts at
+        // row 6 and occupies rows 6–8.  Those rows must be cleared before
+        // the image is placed so old text from a previous frame doesn't
+        // bleed through the Kitty virtual overlay.
+        let img = KittyImage {
+            id: 99,
+            rgba_data: vec![0u8; 4 * 4 * 48],
+            pixel_width: 4,
+            pixel_height: 48,
+            display_cols: None,
+        };
+        let doc = make_doc(vec![
+            DocItem::Text("a\nb\nc\nd\ne".to_string()),
+            DocItem::Image(img),
+        ]);
+        let entries = layout(&doc, 8, 16);
+        // 5 text rows + 3 image rows = 8 entries.
+        assert_eq!(entries.len(), 8);
+
+        let mut transmitted = HashSet::new();
+        let frame = render_frame(&doc, &entries, 0, 10, 8, 16, &mut transmitted);
+
+        // Image starts at content row 5 → terminal row 6 (1-based).
+        // Rows 6, 7, 8 must each have a clear-line sequence (\x1b[K)
+        // emitted BEFORE the image placement escape.
+        let place_pos = frame.find("a=T").expect("expected image transmit");
+        for row in 6..=8u32 {
+            let clear = format!("\x1b[{row};1H\x1b[K");
+            let clear_pos = frame.find(&clear).unwrap_or_else(|| {
+                panic!("expected clear sequence for row {row}: {clear:?}")
+            });
+            assert!(
+                clear_pos < place_pos,
+                "clear for row {row} must come before image placement"
+            );
+        }
     }
 }

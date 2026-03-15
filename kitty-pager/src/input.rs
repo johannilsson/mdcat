@@ -14,8 +14,9 @@ use crate::PagerOptions;
 
 /// Run the interactive pager event loop.
 pub(crate) fn run_pager(doc: &KittyDocument, opts: &PagerOptions) -> Result<()> {
+    let cell_w = opts.cell_pixel_width.max(1);
     let cell_h = opts.cell_pixel_height.max(1);
-    let mut entries = layout(doc, cell_h);
+    let mut entries = layout(doc, cell_w, cell_h);
     if entries.is_empty() {
         return Ok(());
     }
@@ -45,9 +46,10 @@ fn event_loop(
     let mut top_entry = 0usize;
     let mut transmitted: HashSet<u32> = HashSet::new();
     let mut screen_rows = opts.term_height;
+    let cell_w = opts.cell_pixel_width.max(1);
     let cell_h = opts.cell_pixel_height.max(1);
 
-    let frame = render_frame(doc, entries, top_entry, screen_rows, cell_h, &mut transmitted);
+    let frame = render_frame(doc, entries, top_entry, screen_rows, cell_w, cell_h, &mut transmitted);
     write!(stdout, "{}", frame)?;
     stdout.flush()?;
 
@@ -92,7 +94,7 @@ fn event_loop(
                 }
 
                 let frame = render_frame(
-                    doc, entries, top_entry, screen_rows, cell_h, &mut transmitted,
+                    doc, entries, top_entry, screen_rows, cell_w, cell_h, &mut transmitted,
                 );
                 write!(stdout, "{}", frame)?;
                 stdout.flush()?;
@@ -100,12 +102,12 @@ fn event_loop(
 
             Event::Resize(_new_cols, new_rows) => {
                 screen_rows = new_rows;
-                *entries = layout(doc, cell_h);
+                *entries = layout(doc, cell_w, cell_h);
                 let max_top = entries.len().saturating_sub(1);
                 top_entry = top_entry.min(max_top);
 
                 let frame = render_frame(
-                    doc, entries, top_entry, screen_rows, cell_h, &mut transmitted,
+                    doc, entries, top_entry, screen_rows, cell_w, cell_h, &mut transmitted,
                 );
                 write!(stdout, "{}", frame)?;
                 stdout.flush()?;
