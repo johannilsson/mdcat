@@ -495,4 +495,45 @@ mod tests {
         assert!(frame.contains("h=32"));
         assert!(frame.contains("r=2"));
     }
+
+    #[test]
+    fn render_frame_clears_rows_under_image() {
+        // Text (5 lines) followed by an image (3 rows at 48px / 16px cell).
+        // With a 10-row screen (9 content + 1 status), the image starts at
+        // row 6 and occupies rows 6–8.  Those rows must be cleared before
+        // the image is placed so old text from a previous frame doesn't
+        // bleed through the Kitty virtual overlay.
+        let img = KittyImage {
+            id: 99,
+            rgba_data: vec![0u8; 4 * 4 * 48],
+            pixel_width: 4,
+            pixel_height: 48,
+            display_cols: None,
+        };
+        let doc = make_doc(vec![
+            DocItem::Text("a\nb\nc\nd\ne".to_string()),
+            DocItem::Image(img),
+        ]);
+        let entries = layout(&doc, 8, 16);
+        // 5 text rows + 3 image rows = 8 entries.
+        assert_eq!(entries.len(), 8);
+
+        let mut transmitted = HashSet::new();
+        let frame = render_frame(&doc, &entries, 0, 10, 8, 16, &mut transmitted);
+
+        // Image starts at content row 5 → terminal row 6 (1-based).
+        // Rows 6, 7, 8 must each have a clear-line sequence (\x1b[K)
+        // emitted BEFORE the image placement escape.
+        let place_pos = frame.find("a=T").expect("expected image transmit");
+        for row in 6..=8u32 {
+            let clear = format!("\x1b[{row};1H\x1b[K");
+            let clear_pos = frame.find(&clear).unwrap_or_else(|| {
+                panic!("expected clear sequence for row {row}: {clear:?}")
+            });
+            assert!(
+                clear_pos < place_pos,
+                "clear for row {row} must come before image placement"
+            );
+        }
+    }
 }
