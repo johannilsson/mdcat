@@ -1,6 +1,5 @@
 use base64::{engine::general_purpose::STANDARD, Engine};
 use std::collections::HashSet;
-use std::io::Write;
 
 use crate::document::{DocItem, KittyDocument};
 
@@ -74,17 +73,6 @@ pub(crate) fn layout(doc: &KittyDocument, cell_px_width: u32, cell_px_height: u3
     entries
 }
 
-/// Open the debug log file if `MDCAT_DEBUG_FRAMES` is set.
-fn debug_log() -> Option<std::fs::File> {
-    std::env::var_os("MDCAT_DEBUG_FRAMES").and_then(|_| {
-        std::fs::OpenOptions::new()
-            .create(true)
-            .append(true)
-            .open("/tmp/mdcat-frames.log")
-            .ok()
-    })
-}
-
 /// Render a full screen frame to a `String`.
 ///
 /// Images are placed with source-rectangle cropping (`y=`, `r=`) so that
@@ -112,11 +100,6 @@ pub(crate) fn render_frame(
     // their continuation rows.
     let mut placed_images: HashSet<usize> = HashSet::new();
 
-    let mut dbg = debug_log();
-    if let Some(ref mut f) = dbg {
-        let _ = writeln!(f, "--- Frame top_entry={top_entry} screen_rows={screen_rows} max_content={max_content_rows} ---");
-    }
-
     for entry in layout.iter().skip(top_entry) {
         if rows_rendered >= max_content_rows {
             break;
@@ -124,10 +107,6 @@ pub(crate) fn render_frame(
 
         match &entry.kind {
             EntryKind::Text(line) => {
-                if let Some(ref mut f) = dbg {
-                    let preview: String = line.chars().take(60).collect();
-                    let _ = writeln!(f, "[row {rows_rendered}] Text: \"{preview}\"");
-                }
                 out.push_str(line);
                 out.push_str("\x1b[K\r\n");
                 rows_rendered += 1;
@@ -164,20 +143,6 @@ pub(crate) fn render_frame(
                     let src_h = raw_src_h.min(img.pixel_height.saturating_sub(crop_top_px));
                     let needs_crop =
                         *row_in_image > 0 || visible_rows < *total_rows;
-
-                    if let Some(ref mut f) = dbg {
-                        let _ = writeln!(
-                            f,
-                            "[row {rows_rendered}] Image id={} row_in_image={} total_rows={} visible_rows={}\n\
-                             \x20        pixel: {}x{} display_cols={:?} cell={}x{}\n\
-                             \x20        crop: y={} h={} needs_crop={}\n\
-                             \x20        cursor_pos_after: row {} (absolute)",
-                            img.id, row_in_image, total_rows, visible_rows,
-                            img.pixel_width, img.pixel_height, img.display_cols, cell_px_width, cell_px_height,
-                            crop_top_px, src_h, needs_crop,
-                            rows_rendered + visible_rows + 1,
-                        );
-                    }
 
                     // Clear every row the image will occupy.  Kitty
                     // images are virtual overlays — they float on top of
