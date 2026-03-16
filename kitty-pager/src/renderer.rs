@@ -156,12 +156,21 @@ pub(crate) fn render_frame(
                     let img_row = rows_rendered + 1; // 1-based
                     out.push_str(&format!("\x1b[{img_row};1H"));
 
-                    if transmitted.contains(&img.id) {
-                        out.push_str(&kitty_place(img, needs_crop, crop_top_px, src_h, visible_rows));
-                    } else {
-                        out.push_str(&kitty_transmit(img, needs_crop, crop_top_px, src_h, visible_rows));
+                    // Compute effective display columns.  When display_cols
+                    // is None (image narrower than terminal), we still need
+                    // to anchor the width via `c=` whenever `r=` is used for
+                    // cropping — otherwise the terminal may scale the image
+                    // to fill the full terminal width.
+                    let effective_cols = img.display_cols.unwrap_or_else(|| {
+                        let cell_w = cell_px_width.max(1);
+                        (img.pixel_width / cell_w).max(1) as u16
+                    });
+
+                    if !transmitted.contains(&img.id) {
+                        out.push_str(&kitty_transmit(img));
                         transmitted.insert(img.id);
                     }
+                    out.push_str(&kitty_place(img, effective_cols, needs_crop, crop_top_px, src_h, visible_rows));
 
                     placed_images.insert(entry.item_idx);
                     rows_rendered += visible_rows;
@@ -196,53 +205,38 @@ pub(crate) fn render_frame(
 
 /// Emit a `a=p` placement command (no pixel data, uses terminal cache).
 ///
+/// `effective_cols` is always provided to anchor the display width.
 /// When `crop` is true, the source rectangle is limited via `y=` (pixel
 /// offset from top) and `h=` (pixel height to show).  This crops without
 /// rescaling — the terminal keeps the same scale factor derived from `c=`.
 fn kitty_place(
     img: &crate::document::KittyImage,
+    effective_cols: u16,
     crop: bool,
     crop_top_px: u32,
     src_height_px: u32,
     visible_rows: u32,
 ) -> String {
-    let cols = img
-        .display_cols
-        .map(|c| format!(",c={c}"))
-        .unwrap_or_default();
     let crop_params = if crop {
         format!(",y={crop_top_px},h={src_height_px},r={visible_rows}")
     } else {
         String::new()
     };
     format!(
-        "\x1b_Ga=p,i={}{}{},q=2;\x1b\\",
-        img.id, cols, crop_params
+        "\x1b_Ga=p,i={},c={}{},q=2;\x1b\\",
+        img.id, effective_cols, crop_params
     )
 }
 
-/// Emit a `a=T` transmit-and-display command with full pixel data.
+/// Emit `a=t` commands to transmit pixel data without displaying.
 ///
-/// When `crop` is true the source rectangle is limited via `y=` and `h=`
-/// (pixel offset and height).  The terminal displays the cropped region at
-/// the same scale as the full image — no zoom change.
-fn kitty_transmit(
-    img: &crate::document::KittyImage,
-    crop: bool,
-    crop_top_px: u32,
-    src_height_px: u32,
-    visible_rows: u32,
-) -> String {
+/// The image is stored in the terminal's cache under `img.id` and can
+/// subsequently be placed (possibly with cropping) via `kitty_place`.
+/// Separating transmission from placement avoids visual artifacts during
+/// chunked data transfer (the terminal never shows a partially-received
+/// image) and ensures the cached image is always the full resolution.
+fn kitty_transmit(img: &crate::document::KittyImage) -> String {
     let b64 = STANDARD.encode(&img.rgba_data);
-    let cols = img
-        .display_cols
-        .map(|c| format!(",c={c}"))
-        .unwrap_or_default();
-    let crop_params = if crop {
-        format!(",y={crop_top_px},h={src_height_px},r={visible_rows}")
-    } else {
-        String::new()
-    };
 
     let mut out = String::new();
     let chunks: Vec<&[u8]> = b64.as_bytes().chunks(4096).collect();
@@ -253,11 +247,10 @@ fn kitty_transmit(
         let more = if i + 1 < total { 1 } else { 0 };
         if i == 0 {
             out.push_str(&format!(
-                "\x1b_Ga=T,f=32,s={w},v={h},i={id}{cols}{crop},q=2,m={more};{chunk_str}\x1b\\",
+                "\x1b_Ga=t,f=32,s={w},v={h},i={id},q=2,m={more};{chunk_str}\x1b\\",
                 w = img.pixel_width,
                 h = img.pixel_height,
                 id = img.id,
-                crop = crop_params,
             ));
         } else {
             out.push_str(&format!("\x1b_Gm={more};{chunk_str}\x1b\\"));
@@ -378,12 +371,19 @@ mod tests {
         let mut transmitted = HashSet::new();
 
         let frame = render_frame(&doc, &entries, 0, 24, 8, 16, &mut transmitted);
-        assert!(frame.contains("a=T"));
+        // First frame: transmit (a=t) then place (a=p).
+        assert!(frame.contains("a=t"));
+        assert!(frame.contains("a=p,i=42"));
         assert!(transmitted.contains(&42));
+        // Transmit must come before placement.
+        let transmit_pos = frame.find("a=t").unwrap();
+        let place_pos = frame.find("a=p").unwrap();
+        assert!(transmit_pos < place_pos);
 
         let frame2 = render_frame(&doc, &entries, 0, 24, 8, 16, &mut transmitted);
+        // Second frame: placement only (no retransmission).
         assert!(frame2.contains("a=p,i=42"));
-        assert!(!frame2.contains("a=T"));
+        assert!(!frame2.contains("a=t"));
     }
 
     #[test]
@@ -489,7 +489,7 @@ mod tests {
         // Image starts at content row 5 → terminal row 6 (1-based).
         // Rows 6, 7, 8 must each have a clear-line sequence (\x1b[K)
         // emitted BEFORE the image placement escape.
-        let place_pos = frame.find("a=T").expect("expected image transmit");
+        let place_pos = frame.find("a=p").expect("expected image placement");
         for row in 6..=8u32 {
             let clear = format!("\x1b[{row};1H\x1b[K");
             let clear_pos = frame.find(&clear).unwrap_or_else(|| {
@@ -500,5 +500,33 @@ mod tests {
                 "clear for row {row} must come before image placement"
             );
         }
+    }
+
+    #[test]
+    fn render_frame_natural_size_image_always_has_cols() {
+        // Image: 80×48px, display_cols=None (natural size), cell 8×16.
+        // natural_cols = 80 / 8 = 10.
+        // When cropped (partial visibility), c=10 must be included
+        // to prevent the terminal from scaling the image to full width.
+        let img = KittyImage {
+            id: 50,
+            rgba_data: vec![0u8; 4 * 80 * 48],
+            pixel_width: 80,
+            pixel_height: 48,
+            display_cols: None,
+        };
+        let doc = make_doc(vec![DocItem::Image(img)]);
+        let entries = layout(&doc, 8, 16);
+        assert_eq!(entries.len(), 3); // 48 / 16 = 3 rows
+
+        let mut transmitted = HashSet::new();
+        // Screen has 2 content rows → image is bottom-cropped to 2 rows.
+        let frame = render_frame(&doc, &entries, 0, 3, 8, 16, &mut transmitted);
+        assert!(frame.contains("c=10"), "expected c=10 for natural-size image crop");
+        assert!(frame.contains("r=2"), "expected r=2 for bottom crop");
+
+        // Full image visible (no crop) — c= should still be present.
+        let frame2 = render_frame(&doc, &entries, 0, 24, 8, 16, &mut transmitted);
+        assert!(frame2.contains("c=10"), "expected c=10 even without crop");
     }
 }
