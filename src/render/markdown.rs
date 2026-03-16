@@ -126,14 +126,21 @@ fn render_node<'a>(
 
             let mut counter = 1u32;
             for child in node.children() {
-                let bullet = match list_type {
-                    ListType::Bullet => "•".to_string(),
-                    ListType::Ordered => {
-                        let s = format!("{counter}.");
-                        counter += 1;
-                        s
+                let child_data = child.data.borrow();
+                let bullet = match &child_data.value {
+                    NodeValue::TaskItem(checked) => {
+                        if checked.is_some() { "☑".to_string() } else { "☐".to_string() }
                     }
+                    _ => match list_type {
+                        ListType::Bullet => "•".to_string(),
+                        ListType::Ordered => {
+                            let s = format!("{counter}.");
+                            counter += 1;
+                            s
+                        }
+                    },
                 };
+                drop(child_data);
                 render_list_item(child, output, base_dir, config, indent, tight, &bullet)?;
             }
             if !in_tight_list {
@@ -257,16 +264,6 @@ fn render_inline<'a>(
                 }
             } else {
                 output.push_str(&format!("\x1b[2m[image: {alt}]\x1b[0m"));
-            }
-        }
-
-        NodeValue::TaskItem(checked) => {
-            let checked = *checked;
-            drop(data);
-            let box_char = if checked.is_some() { "☑" } else { "☐" };
-            output.push_str(&format!("{box_char} "));
-            for child in node.children() {
-                render_inline(child, output, base_dir, config)?;
             }
         }
 
