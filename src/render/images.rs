@@ -168,7 +168,7 @@ fn load_local_image(url: &str, base_dir: Option<&Path>) -> Result<DynamicImage> 
 
 pub fn rasterize_svg(svg_data: &[u8]) -> Result<DynamicImage> {
     use resvg::usvg::{Options, Tree};
-    use tiny_skia::{Pixmap, Transform};
+    use resvg::tiny_skia::{Pixmap, Transform};
 
     let mut options = Options::default();
     options.fontdb_mut().load_system_fonts();
