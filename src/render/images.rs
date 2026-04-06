@@ -193,14 +193,15 @@ pub fn rasterize_svg(svg_data: &[u8]) -> Result<DynamicImage> {
 
 #[cfg(feature = "network-images")]
 fn load_remote_image(url: &str) -> Result<DynamicImage> {
-    let bytes = ureq::get(url)
+    let reader = ureq::get(url)
         .call()
         .with_context(|| format!("failed to fetch image '{url}'"))?
+        .into_body()
         .into_reader();
 
     let mut buf = Vec::new();
     use std::io::Read;
-    bytes.take(50 * 1024 * 1024).read_to_end(&mut buf)?; // 50MB limit
+    reader.take(50 * 1024 * 1024).read_to_end(&mut buf)?; // 50MB limit
 
     image::load_from_memory(&buf)
         .context("failed to decode remote image")
