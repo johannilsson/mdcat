@@ -8,6 +8,10 @@ cat README.md | mdcat
 mdcat --pager README.md   # scroll long files
 ```
 
+
+![Demo of mdcat](screenshot.png)
+
+
 ## Features
 
 - Syntax-highlighted code blocks
