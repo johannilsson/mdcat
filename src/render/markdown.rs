@@ -1,6 +1,6 @@
 use anyhow::Result;
 use comrak::{Arena, Options, parse_document};
-use comrak::nodes::{AstNode, NodeValue, NodeHeading, ListType, NodeCodeBlock};
+use comrak::nodes::{AstNode, NodeValue, NodeHeading, ListType};
 use std::path::Path;
 use crate::render::Config;
 use crate::render::code::highlight_code;
@@ -96,9 +96,9 @@ fn render_node<'a>(
             output.push('\n');
         }
 
-        NodeValue::CodeBlock(NodeCodeBlock { info, literal, .. }) => {
-            let lang = info.split_whitespace().next().unwrap_or("").to_string();
-            let code = literal.clone();
+        NodeValue::CodeBlock(cb) => {
+            let lang = cb.info.split_whitespace().next().unwrap_or("").to_string();
+            let code = cb.literal.clone();
             drop(data);
 
             if lang == "mermaid" && config.mermaid {
@@ -130,7 +130,7 @@ fn render_node<'a>(
                 let child_data = child.data.borrow();
                 let bullet = match &child_data.value {
                     NodeValue::TaskItem(checked) => {
-                        if checked.is_some() { "☑".to_string() } else { "☐".to_string() }
+                        if checked.symbol.is_some() { "☑".to_string() } else { "☐".to_string() }
                     }
                     _ => match list_type {
                         ListType::Bullet => "•".to_string(),
