@@ -17,6 +17,7 @@ pub fn render_document(markdown: &str, base_dir: Option<&Path>, config: &Config)
     options.extension.autolink = true;
     options.extension.tasklist = true;
     options.extension.footnotes = true;
+    options.extension.front_matter_delimiter = Some("---".to_owned());
 
     let root = parse_document(&arena, markdown, &options);
 
@@ -167,6 +168,30 @@ fn render_node<'a>(
         NodeValue::FootnoteDefinition(_) => {
             drop(data);
             // TODO: collect footnotes and render at end
+        }
+
+        NodeValue::FrontMatter(content) => {
+            let content = content.clone();
+            drop(data);
+            let width = config.width as usize;
+
+            // comrak includes the --- delimiters in the content; strip them
+            let body: Vec<&str> = content
+                .lines()
+                .filter(|l| l.trim() != "---")
+                .collect();
+
+            let sep = "─".repeat(width.min(40));
+            output.push_str(&format!("\x1b[2m{sep}\x1b[0m\n"));
+            for line in body {
+                if line.is_empty() {
+                    output.push('\n');
+                } else {
+                    let wrapped = word_wrap(line, width, 2);
+                    output.push_str(&format!("\x1b[2m{wrapped}\x1b[0m\n"));
+                }
+            }
+            output.push_str(&format!("\x1b[2m{sep}\x1b[0m\n\n"));
         }
 
         _ => {
@@ -445,7 +470,7 @@ fn word_wrap(text: &str, width: usize, indent: usize) -> String {
 }
 
 /// Estimate visible length of a string, ignoring ANSI escape sequences.
-fn visible_len(s: &str) -> usize {
+pub(crate) fn visible_len(s: &str) -> usize {
     let mut len = 0;
     let mut in_escape = false;
     for ch in s.chars() {
@@ -458,4 +483,42 @@ fn visible_len(s: &str) -> usize {
         }
     }
     len
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::render::Config;
+
+    fn test_config(width: u16) -> Config {
+        Config {
+            width,
+            images: false,
+            mermaid: false,
+            mermaid_binary: String::new(),
+            theme: String::new(),
+            image_protocol: None,
+            kitty_store: None,
+        }
+    }
+
+    #[test]
+    fn frontmatter_wraps_long_lines() {
+        let md = "---\ntitle: This is a very long title that should definitely wrap at the given terminal width\n---\n\nBody text.";
+        let result = render_document(md, None, &test_config(40)).unwrap();
+        for line in result.lines() {
+            assert!(
+                visible_len(line) <= 40,
+                "line exceeds width: {line:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn frontmatter_short_lines_pass_through() {
+        let md = "---\ntitle: Short\ndate: 2024-01-01\n---\n\nBody.";
+        let result = render_document(md, None, &test_config(80)).unwrap();
+        assert!(result.contains("title: Short"));
+        assert!(result.contains("date: 2024-01-01"));
+    }
 }
