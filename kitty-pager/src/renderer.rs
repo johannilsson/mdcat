@@ -190,11 +190,7 @@ pub(crate) fn render_frame(
 
     // Status bar.
     let total = layout.len();
-    let pct = if total == 0 {
-        100
-    } else {
-        ((top_entry + 1) * 100 / total).min(100)
-    };
+    let pct = ((top_entry + 1) * 100).checked_div(total).unwrap_or(100).min(100);
     out.push_str(&format!(
         "\x1b[{row};1H\x1b[2K\x1b[7m {pct}%\x1b[0m",
         row = screen_rows
