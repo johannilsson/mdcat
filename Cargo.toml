@@ -22,7 +22,7 @@ network-images = ["ureq"]
 kitty-pager = { path = "kitty-pager" }
 
 # Markdown parsing - full GFM AST
-comrak = "0.52"
+comrak = "0.53"
 
 # Base64 encoding for iTerm2/Kitty image protocols
 base64 = "0.22"
