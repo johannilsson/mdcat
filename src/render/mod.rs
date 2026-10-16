@@ -70,10 +70,7 @@ pub fn render_all(sources: &[Source], config: &Config) -> Result<String> {
     for (i, source) in sources.iter().enumerate() {
         if i > 0 {
             // Separator between files
-            let width = config.width as usize;
-            let header = format!(" {} ", source.name);
-            let dashes = "─".repeat((width.saturating_sub(header.len() + 2)).max(4));
-            output.push_str(&format!("\x1b[2m{dashes}{header}{dashes}\x1b[0m\n\n"));
+            output.push_str(&separator(&source.name, config.width as usize));
         }
 
         let rendered = render_document(&source.content, source.base_dir.as_deref(), config)?;
@@ -81,6 +78,14 @@ pub fn render_all(sources: &[Source], config: &Config) -> Result<String> {
     }
 
     Ok(output)
+}
+
+/// Dim separator line naming the next source, sized to the terminal width.
+/// Width is measured in characters, not bytes, so non-ASCII names line up.
+fn separator(name: &str, width: usize) -> String {
+    let header = format!(" {name} ");
+    let dashes = "─".repeat(width.saturating_sub(header.chars().count() + 2).max(4));
+    format!("\x1b[2m{dashes}{header}{dashes}\x1b[0m\n\n")
 }
 
 /// Build a `KittyDocument` from a rendered ANSI string and the image store.
@@ -151,7 +156,22 @@ fn parse_sentinel(sentinel: &str, store: &KittyImageStore) -> Option<kitty_pager
 mod tests {
     use super::*;
 
-    fn make_store_with_image() -> KittyImageStore {
+    #[test]
+    fn separator_counts_chars_not_bytes() {
+        // "ååååå" is 5 chars but 10 bytes; both lines must have equal visible width.
+        let ascii = separator("aaaaa", 40);
+        let wide = separator("ååååå", 40);
+        let count = |s: &str| s.chars().filter(|c| *c == '─').count();
+        assert_eq!(count(&ascii), count(&wide));
+    }
+
+    #[test]
+    fn separator_has_minimum_dashes() {
+        let s = separator("a-very-long-file-name.md", 10);
+        assert_eq!(s.chars().filter(|c| *c == '─').count(), 8);
+    }
+
+    fn make_store_with_image()-> KittyImageStore {
         let mut store = KittyImageStore::new();
         store.push(vec![0u8; 4 * 10 * 10], 10, 10, Some(20));
         store
