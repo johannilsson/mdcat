@@ -361,7 +361,7 @@ fn render_table<'a>(node: &'a AstNode<'a>, output: &mut String, config: &Config)
     let mut col_widths: Vec<usize> = vec![0; cols];
     for row in &rows {
         for (i, cell) in row.iter().enumerate() {
-            col_widths[i] = col_widths[i].max(cell.len());
+            col_widths[i] = col_widths[i].max(cell.chars().count());
         }
     }
 
@@ -402,11 +402,11 @@ fn render_table<'a>(node: &'a AstNode<'a>, output: &mut String, config: &Config)
 
 fn render_stacked_table(rows: &[Vec<String>], output: &mut String, width: usize) {
     let headers = &rows[0];
-    let label_width = headers.iter().map(|h| h.len()).max().unwrap_or(0);
+    let label_width = headers.iter().map(|h| h.chars().count()).max().unwrap_or(0);
 
     for (i, row) in rows[1..].iter().enumerate() {
         let row_label = format!(" Row {} ", i + 1);
-        let dash_total = width.saturating_sub(row_label.len()).max(4);
+        let dash_total = width.saturating_sub(row_label.chars().count()).max(4);
         let left = dash_total / 2;
         let right = dash_total - left;
         output.push_str(&format!(
@@ -520,5 +520,25 @@ mod tests {
         let result = render_document(md, None, &test_config(80)).unwrap();
         assert!(result.contains("title: Short"));
         assert!(result.contains("date: 2024-01-01"));
+    }
+
+    #[test]
+    fn table_width_counts_chars_not_bytes() {
+        // Table is 10 columns wide (6 chars + padding + borders): fits at width 10.
+        let md = "| ééééé |\n|---|\n| ééééé |\n";
+        let result = render_document(md, None, &test_config(10)).unwrap();
+        assert!(result.contains('┌'), "table should not fall back to stacked layout: {result:?}");
+    }
+
+    #[test]
+    fn stacked_table_aligns_non_ascii_headers() {
+        let rows = vec![
+            vec!["Nämé".to_string(), "x".to_string()],
+            vec!["a".to_string(), "b".to_string()],
+        ];
+        let mut out = String::new();
+        render_stacked_table(&rows, &mut out, 40);
+        assert!(out.contains("Nämé\x1b[0m : a"), "{out:?}");
+        assert!(out.contains("x   \x1b[0m : b"), "{out:?}");
     }
 }
