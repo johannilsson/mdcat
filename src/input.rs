@@ -49,3 +49,52 @@ pub fn collect(files: Vec<PathBuf>) -> Result<Vec<Source>> {
     }
     Ok(sources)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn collect_reads_file_with_name_and_base_dir() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("doc.md");
+        std::fs::write(&path, "# Hi\n").unwrap();
+
+        let sources = collect(vec![path.clone()]).unwrap();
+        assert_eq!(sources.len(), 1);
+        assert_eq!(sources[0].name, path.display().to_string());
+        assert_eq!(sources[0].content, "# Hi\n");
+        assert_eq!(sources[0].base_dir.as_deref(), Some(dir.path()));
+    }
+
+    #[test]
+    fn collect_preserves_order_of_multiple_files() {
+        let dir = tempfile::tempdir().unwrap();
+        let a = dir.path().join("a.md");
+        let b = dir.path().join("b.md");
+        std::fs::write(&a, "A").unwrap();
+        std::fs::write(&b, "B").unwrap();
+
+        let sources = collect(vec![b, a]).unwrap();
+        let contents: Vec<_> = sources.iter().map(|s| s.content.as_str()).collect();
+        assert_eq!(contents, ["B", "A"]);
+    }
+
+    #[test]
+    fn collect_missing_file_error_names_path() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("missing.md");
+
+        let err = collect(vec![path.clone()]).err().expect("should fail");
+        assert!(format!("{err:#}").contains(&path.display().to_string()));
+    }
+
+    #[test]
+    fn collect_invalid_utf8_is_an_error() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("bad.md");
+        std::fs::write(&path, [0xff, 0xfe, 0xfd]).unwrap();
+
+        assert!(collect(vec![path]).is_err());
+    }
+}
