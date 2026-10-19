@@ -54,13 +54,13 @@ fn render_node<'a>(
 
             match level {
                 1 => {
-                    let line = "═".repeat(width.min(text.len() + 4));
+                    let line = "═".repeat(width.min(text.chars().count() + 4));
                     output.push_str(&format!("\n\x1b[1;34m{line}\x1b[0m\n"));
                     output.push_str(&format!("\x1b[1;34m  {text}\x1b[0m\n"));
                     output.push_str(&format!("\x1b[1;34m{line}\x1b[0m\n\n"));
                 }
                 2 => {
-                    let line = "─".repeat(width.min(text.len() + 2));
+                    let line = "─".repeat(width.min(text.chars().count() + 2));
                     output.push_str(&format!("\n\x1b[1;36m{text}\x1b[0m\n"));
                     output.push_str(&format!("\x1b[36m{line}\x1b[0m\n\n"));
                 }
@@ -540,5 +540,12 @@ mod tests {
         render_stacked_table(&rows, &mut out, 40);
         assert!(out.contains("Nämé\x1b[0m : a"), "{out:?}");
         assert!(out.contains("x   \x1b[0m : b"), "{out:?}");
+    }
+
+    #[test]
+    fn heading_underline_counts_chars_not_bytes() {
+        let result = render_document("# ééééé\n\n## ééééé\n", None, &test_config(80)).unwrap();
+        assert!(result.contains(&"═".repeat(9)) && !result.contains(&"═".repeat(10)), "{result:?}");
+        assert!(result.contains(&"─".repeat(7)) && !result.contains(&"─".repeat(8)), "{result:?}");
     }
 }
