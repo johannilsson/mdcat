@@ -123,9 +123,10 @@ fn render_node<'a>(
         NodeValue::List(list) => {
             let list_type = list.list_type;
             let tight = list.tight;
+            let start = list.start;
             drop(data);
 
-            let mut counter = 1u32;
+            let mut counter = start;
             for child in node.children() {
                 let child_data = child.data.borrow();
                 let bullet = match &child_data.value {
@@ -540,6 +541,20 @@ mod tests {
         render_stacked_table(&rows, &mut out, 40);
         assert!(out.contains("Nämé\x1b[0m : a"), "{out:?}");
         assert!(out.contains("x   \x1b[0m : b"), "{out:?}");
+    }
+
+    #[test]
+    fn ordered_list_honours_start_number() {
+        let result = render_document("3. three\n4. four\n", None, &test_config(80)).unwrap();
+        assert!(result.contains("3.\x1b[0m"), "{result:?}");
+        assert!(result.contains("4.\x1b[0m"), "{result:?}");
+        assert!(!result.contains("1."), "{result:?}");
+    }
+
+    #[test]
+    fn ordered_list_default_starts_at_one() {
+        let result = render_document("1. a\n2. b\n", None, &test_config(80)).unwrap();
+        assert!(result.contains("1.\x1b[0m") && result.contains("2.\x1b[0m"), "{result:?}");
     }
 
     #[test]
