@@ -471,16 +471,41 @@ fn word_wrap(text: &str, width: usize, indent: usize) -> String {
 }
 
 /// Estimate visible length of a string, ignoring ANSI escape sequences.
+///
+/// Handles CSI sequences (`ESC [ ... final-byte`) and OSC sequences such as
+/// OSC 8 hyperlinks (`ESC ] ... BEL` or `ESC ] ... ESC \`).
 pub(crate) fn visible_len(s: &str) -> usize {
     let mut len = 0;
-    let mut in_escape = false;
-    for ch in s.chars() {
-        if ch == '\x1b' {
-            in_escape = true;
-        } else if in_escape && ch == 'm' {
-            in_escape = false;
-        } else if !in_escape {
+    let mut chars = s.chars().peekable();
+    while let Some(ch) = chars.next() {
+        if ch != '\x1b' {
             len += 1;
+            continue;
+        }
+        match chars.peek() {
+            Some('[') => {
+                chars.next();
+                for c in chars.by_ref() {
+                    if ('\x40'..='\x7e').contains(&c) {
+                        break;
+                    }
+                }
+            }
+            Some(']') => {
+                chars.next();
+                while let Some(c) = chars.next() {
+                    if c == '\x07' {
+                        break;
+                    }
+                    if c == '\x1b' {
+                        chars.next_if_eq(&'\\');
+                        break;
+                    }
+                }
+            }
+            _ => {
+                chars.next();
+            }
         }
     }
     len
@@ -562,5 +587,18 @@ mod tests {
         let result = render_document("# ééééé\n\n## ééééé\n", None, &test_config(80)).unwrap();
         assert!(result.contains(&"═".repeat(9)) && !result.contains(&"═".repeat(10)), "{result:?}");
         assert!(result.contains(&"─".repeat(7)) && !result.contains(&"─".repeat(8)), "{result:?}");
+    }
+
+    #[test]
+    fn visible_len_ignores_osc8_hyperlink_sequences() {
+        let link = crate::render::links::osc8_link("https://example.com/a", "label");
+        // "label" + " (→ https://example.com/a)"
+        assert_eq!(visible_len(&link), "label (→ https://example.com/a)".chars().count());
+    }
+
+    #[test]
+    fn visible_len_ignores_csi_and_bel_terminated_osc() {
+        assert_eq!(visible_len("\x1b[1;34mabc\x1b[0m"), 3);
+        assert_eq!(visible_len("\x1b]8;;http://x\x07ab\x1b]8;;\x07"), 2);
     }
 }
