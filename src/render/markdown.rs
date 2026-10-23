@@ -458,21 +458,29 @@ fn word_wrap(text: &str, width: usize, indent: usize) -> String {
     let mut result = String::new();
     let mut line_len = 0usize;
 
-    for word in text.split_whitespace() {
-        // Approximate visible length (ignores ANSI codes)
-        let word_len = visible_len(word);
-        if line_len == 0 {
-            result.push_str(word);
-            line_len = word_len;
-        } else if line_len + 1 + word_len > available {
+    // Explicit newlines (hard line breaks) are preserved; each segment wraps independently.
+    for (i, segment) in text.split('\n').enumerate() {
+        if i > 0 {
             result.push('\n');
             result.push_str(&" ".repeat(indent));
-            result.push_str(word);
-            line_len = word_len;
-        } else {
-            result.push(' ');
-            result.push_str(word);
-            line_len += 1 + word_len;
+            line_len = 0;
+        }
+        for word in segment.split_whitespace() {
+            // Approximate visible length (ignores ANSI codes)
+            let word_len = visible_len(word);
+            if line_len == 0 {
+                result.push_str(word);
+                line_len = word_len;
+            } else if line_len + 1 + word_len > available {
+                result.push('\n');
+                result.push_str(&" ".repeat(indent));
+                result.push_str(word);
+                line_len = word_len;
+            } else {
+                result.push(' ');
+                result.push_str(word);
+                line_len += 1 + word_len;
+            }
         }
     }
 
@@ -596,6 +604,25 @@ mod tests {
         let result = render_document("# ééééé\n\n## ééééé\n", None, &test_config(80)).unwrap();
         assert!(result.contains(&"═".repeat(9)) && !result.contains(&"═".repeat(10)), "{result:?}");
         assert!(result.contains(&"─".repeat(7)) && !result.contains(&"─".repeat(8)), "{result:?}");
+    }
+
+    #[test]
+    fn hard_line_break_is_preserved() {
+        let result = render_document("first  \nsecond\n", None, &test_config(80)).unwrap();
+        assert!(result.contains("first\nsecond"), "{result:?}");
+    }
+
+    #[test]
+    fn hard_line_break_is_indented_in_list_item() {
+        let result = render_document("- first  \n  second\n", None, &test_config(80)).unwrap();
+        assert!(result.contains("first\n  second"), "{result:?}");
+    }
+
+    #[test]
+    fn word_wrap_keeps_newlines_and_resets_line_length() {
+        assert_eq!(word_wrap("a b\nc d", 80, 0), "a b\nc d");
+        // Second line starts fresh, so "cc dd" fits even though the total would not.
+        assert_eq!(word_wrap("aaaaaaaaaaaaaaaaaaaa\ncc dd", 25, 0), "aaaaaaaaaaaaaaaaaaaa\ncc dd");
     }
 
     #[test]
