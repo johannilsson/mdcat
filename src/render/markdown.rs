@@ -317,8 +317,17 @@ fn render_list_item<'a>(
     let prefix = " ".repeat(parent_indent);
     output.push_str(&format!("{prefix}\x1b[1m{bullet}\x1b[0m "));
 
-    for child in node.children() {
-        render_node(child, output, base_dir, config, indent, tight)?;
+    for (i, child) in node.children().enumerate() {
+        let mut child_out = String::new();
+        render_node(child, &mut child_out, base_dir, config, indent, tight)?;
+        // The bullet already occupies the first child's indent; don't pad it twice.
+        if i == 0 {
+            if let Some(rest) = child_out.strip_prefix(&" ".repeat(indent)) {
+                output.push_str(rest);
+                continue;
+            }
+        }
+        output.push_str(&child_out);
     }
 
     Ok(())
@@ -594,6 +603,19 @@ mod tests {
         let link = crate::render::links::osc8_link("https://example.com/a", "label");
         // "label" + " (→ https://example.com/a)"
         assert_eq!(visible_len(&link), "label (→ https://example.com/a)".chars().count());
+    }
+
+    #[test]
+    fn list_item_text_follows_bullet_with_single_space() {
+        let result = render_document("- a\n- b\n", None, &test_config(80)).unwrap();
+        assert!(result.contains("•\x1b[0m a\n"), "{result:?}");
+        assert!(result.contains("•\x1b[0m b\n"), "{result:?}");
+    }
+
+    #[test]
+    fn nested_list_item_indent_is_preserved() {
+        let result = render_document("- a\n  - b\n", None, &test_config(80)).unwrap();
+        assert!(result.contains("\n  \x1b[1m•\x1b[0m b\n"), "{result:?}");
     }
 
     #[test]
