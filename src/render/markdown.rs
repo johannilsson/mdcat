@@ -87,8 +87,11 @@ fn render_node<'a>(
         NodeValue::BlockQuote => {
             drop(data);
             let mut inner = String::new();
+            // The "│ " prefix takes two columns; wrap the contents narrower to compensate.
+            let mut inner_config = config.clone();
+            inner_config.width = config.width.saturating_sub(2);
             for child in node.children() {
-                render_node(child, &mut inner, base_dir, config, 0, false)?;
+                render_node(child, &mut inner, base_dir, &inner_config, 0, false)?;
             }
             for line in inner.lines() {
                 output.push_str(&format!("\x1b[2m│\x1b[0m \x1b[3m{line}\x1b[0m\n"));
@@ -649,5 +652,14 @@ mod tests {
     fn visible_len_ignores_csi_and_bel_terminated_osc() {
         assert_eq!(visible_len("\x1b[1;34mabc\x1b[0m"), 3);
         assert_eq!(visible_len("\x1b]8;;http://x\x07ab\x1b]8;;\x07"), 2);
+    }
+
+    #[test]
+    fn blockquote_lines_fit_within_width() {
+        let md = "> This quoted paragraph is long enough that it has to wrap onto several lines.";
+        let result = render_document(md, None, &test_config(40)).unwrap();
+        for line in result.lines() {
+            assert!(visible_len(line) <= 40, "line exceeds width: {line:?}");
+        }
     }
 }
