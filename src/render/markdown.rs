@@ -333,6 +333,11 @@ fn render_list_item<'a>(
         output.push_str(&child_out);
     }
 
+    // An empty item has no children, so nothing ended the bullet's line.
+    if !output.ends_with('\n') {
+        output.push('\n');
+    }
+
     Ok(())
 }
 
@@ -661,5 +666,15 @@ mod tests {
         for line in result.lines() {
             assert!(visible_len(line) <= 40, "line exceeds width: {line:?}");
         }
+    }
+
+    #[test]
+    fn empty_list_item_ends_its_line() {
+        let result = render_document("- a\n-\n- c\n", None, &test_config(80)).unwrap();
+        assert!(result.contains("•\x1b[0m a\n"), "{result:?}");
+        assert!(result.contains("•\x1b[0m \n"), "{result:?}");
+        assert!(result.contains("•\x1b[0m c\n"), "{result:?}");
+        assert_eq!(result.matches('•').count(), 3);
+        assert_eq!(result.lines().filter(|l| l.contains('•')).count(), 3, "{result:?}");
     }
 }
