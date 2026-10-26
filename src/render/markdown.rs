@@ -169,9 +169,10 @@ fn render_node<'a>(
             render_table(node, output, config)?;
         }
 
-        NodeValue::FootnoteDefinition(_) => {
+        NodeValue::FootnoteDefinition(def) => {
+            let label = format!("[{}]:", def.name);
             drop(data);
-            // TODO: collect footnotes and render at end
+            render_list_item(node, output, base_dir, config, indent, false, &label)?;
         }
 
         NodeValue::FrontMatter(content) => {
@@ -227,6 +228,12 @@ fn render_inline<'a>(
         NodeValue::SoftBreak => {
             output.push(' ');
             drop(data);
+        }
+
+        NodeValue::FootnoteReference(reference) => {
+            let name = reference.name.clone();
+            drop(data);
+            output.push_str(&format!("\x1b[2m[{name}]\x1b[0m"));
         }
 
         NodeValue::LineBreak => {
@@ -546,6 +553,21 @@ mod tests {
             image_protocol: None,
             kitty_store: None,
         }
+    }
+
+    #[test]
+    fn footnote_reference_is_rendered() {
+        let md = "Hello[^1]\n\n[^1]: The note";
+        let result = render_document(md, None, &test_config(80)).unwrap();
+        assert!(result.contains("Hello\x1b[2m[1]\x1b[0m"), "got: {result:?}");
+    }
+
+    #[test]
+    fn footnote_definition_is_rendered() {
+        let md = "Hello[^note]\n\n[^note]: The note text";
+        let result = render_document(md, None, &test_config(80)).unwrap();
+        assert!(result.contains("[note]:"), "got: {result:?}");
+        assert!(result.contains("The note text"), "got: {result:?}");
     }
 
     #[test]
