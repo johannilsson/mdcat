@@ -424,6 +424,15 @@ fn render_stacked_table(rows: &[Vec<String>], output: &mut String, width: usize)
     let headers = &rows[0];
     let label_width = headers.iter().map(|h| h.chars().count()).max().unwrap_or(0);
 
+    // No body rows to stack: show the headers so the table isn't silently dropped.
+    if rows.len() == 1 {
+        for header in headers {
+            output.push_str(&format!("\x1b[1m{header}\x1b[0m\n"));
+        }
+        output.push('\n');
+        return;
+    }
+
     for (i, row) in rows[1..].iter().enumerate() {
         let row_label = format!(" Row {} ", i + 1);
         let dash_total = width.saturating_sub(row_label.chars().count()).max(4);
@@ -682,6 +691,15 @@ mod tests {
         let result = render_document(md, None, &test_config(40)).unwrap();
         for line in result.lines() {
             assert!(visible_len(line) <= 40, "line exceeds width: {line:?}");
+        }
+    }
+
+    #[test]
+    fn header_only_table_wider_than_terminal_is_not_dropped() {
+        let md = "| alpha | beta | gamma |\n|---|---|---|\n";
+        let result = render_document(md, None, &test_config(10)).unwrap();
+        for h in ["alpha", "beta", "gamma"] {
+            assert!(result.contains(h), "missing {h}: {result:?}");
         }
     }
 }
