@@ -16,6 +16,7 @@ path = "src/main.rs"
 [features]
 default = []
 network-images = ["ureq"]
+annotations = ["folio"]
 
 [dependencies]
 # Kitty pager (workspace sibling)
@@ -53,6 +54,9 @@ tempfile = "3"
 
 # Image decoding
 image = { version = "0.25", default-features = false, features = ["png", "jpeg", "gif", "webp"] }
+
+# Optional: Folio annotations overlay (the engine that anchors them)
+folio = { git = "https://github.com/johannilsson/folio", optional = true }
 
 # Optional: network image fetching
 ureq = { version = "3", optional = true }

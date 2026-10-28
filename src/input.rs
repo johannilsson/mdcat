@@ -7,6 +7,9 @@ pub struct Source {
     pub content: String,
     /// Directory of the source file, for resolving relative image paths.
     pub base_dir: Option<PathBuf>,
+    /// The file it was read from; `None` for stdin.
+    #[cfg_attr(not(feature = "annotations"), allow(dead_code))]
+    pub path: Option<PathBuf>,
 }
 
 /// Collect all input sources from the given file paths.
@@ -21,6 +24,7 @@ pub fn collect(files: Vec<PathBuf>) -> Result<Vec<Source>> {
             name: "<stdin>".to_string(),
             content,
             base_dir: std::env::current_dir().ok(),
+            path: None,
         }]);
     }
 
@@ -35,6 +39,7 @@ pub fn collect(files: Vec<PathBuf>) -> Result<Vec<Source>> {
                 name: "<stdin>".to_string(),
                 content,
                 base_dir: std::env::current_dir().ok(),
+                path: None,
             });
         } else {
             let content = std::fs::read_to_string(path)
@@ -44,6 +49,7 @@ pub fn collect(files: Vec<PathBuf>) -> Result<Vec<Source>> {
                 name: path.display().to_string(),
                 content,
                 base_dir,
+                path: Some(path.clone()),
             });
         }
     }

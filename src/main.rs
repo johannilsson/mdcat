@@ -50,6 +50,11 @@ struct Cli {
     /// Image rendering protocol override
     #[arg(long, value_name = "PROTOCOL", value_parser = ["auto", "kitty", "iterm2", "sixel", "blocks"])]
     image_protocol: Option<String>,
+
+    /// Show pending Folio annotations (from the file's .folio sidecar) over the text
+    #[cfg(feature = "annotations")]
+    #[arg(long)]
+    annotations: bool,
 }
 
 #[derive(Subcommand)]
@@ -83,6 +88,10 @@ fn main() -> Result<()> {
         theme: cli.theme.clone(),
         image_protocol: cli.image_protocol.clone(),
         kitty_store: None,
+        #[cfg(feature = "annotations")]
+        annotations: cli.annotations,
+        #[cfg(feature = "annotations")]
+        overlay: None,
     };
 
     let pager_forced = cli.pager || invoked_as_mdless;

@@ -9,6 +9,8 @@ mod code;
 mod images;
 mod mermaid;
 mod links;
+#[cfg(feature = "annotations")]
+pub mod annotations;
 
 pub use markdown::render_document;
 
@@ -60,6 +62,26 @@ pub struct Config {
     /// When `Some`, images are captured into the store instead of being encoded
     /// as escape sequences.  Used by the Kitty pager path.
     pub kitty_store: Option<Rc<RefCell<KittyImageStore>>>,
+    /// Draw each file's pending Folio annotations over it (`--annotations`).
+    #[cfg(feature = "annotations")]
+    pub annotations: bool,
+    /// The annotations of the document being rendered, set per source by `render_all`.
+    #[cfg(feature = "annotations")]
+    pub overlay: Option<Rc<annotations::Overlay>>,
+}
+
+/// The pending annotations of `source`, when `--annotations` is on and it is
+/// a file with a sidecar. A sidecar that can't be read is reported, not fatal.
+#[cfg(feature = "annotations")]
+fn load_overlay(source: &Source, config: &Config) -> Option<Rc<annotations::Overlay>> {
+    let path = source.path.as_deref().filter(|_| config.annotations)?;
+    match annotations::Overlay::load(path, &source.content) {
+        Ok(overlay) => overlay.map(Rc::new),
+        Err(e) => {
+            eprintln!("mdcat: cannot read annotations for {}: {e}", source.name);
+            None
+        }
+    }
 }
 
 /// Render all sources to a single ANSI string.
@@ -73,6 +95,8 @@ pub fn render_all(sources: &[Source], config: &Config) -> Result<String> {
             output.push_str(&separator(&source.name, config.width as usize));
         }
 
+        #[cfg(feature = "annotations")]
+        let config = &Config { overlay: load_overlay(source, config), ..config.clone() };
         let rendered = render_document(&source.content, source.base_dir.as_deref(), config)?;
         output.push_str(&rendered);
     }

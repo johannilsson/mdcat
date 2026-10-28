@@ -27,7 +27,18 @@ cargo install --path .
 
 # With network image support
 cargo install --path . --features network-images
+
+# With Folio annotations (--annotations)
+cargo install --path . --features annotations
 ```
+
+## Folio annotations
+
+Built with the `annotations` feature, `mdcat --annotations FILE.md` shows the pending
+annotations from the file's [Folio](https://github.com/johannilsson/folio) sidecar
+(`.folio/…`) over the text: the changes drawn in place and numbered, each comment and its
+replies under the paragraph, heading or table it belongs to. It only reads the sidecar;
+accept and reject them with `folio` or the Folio app.
 
 ## Usage
 
