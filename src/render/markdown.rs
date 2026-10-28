@@ -132,17 +132,16 @@ fn render_node<'a>(
             let mut counter = start;
             for child in node.children() {
                 let child_data = child.data.borrow();
+                // Task items still occupy a position in an ordered list.
+                let number = counter;
+                counter += 1;
                 let bullet = match &child_data.value {
                     NodeValue::TaskItem(checked) => {
                         if checked.symbol.is_some() { "☑".to_string() } else { "☐".to_string() }
                     }
                     _ => match list_type {
                         ListType::Bullet => "•".to_string(),
-                        ListType::Ordered => {
-                            let s = format!("{counter}.");
-                            counter += 1;
-                            s
-                        }
+                        ListType::Ordered => format!("{number}."),
                     },
                 };
                 drop(child_data);
@@ -616,6 +615,13 @@ mod tests {
         assert!(result.contains("3.\x1b[0m"), "{result:?}");
         assert!(result.contains("4.\x1b[0m"), "{result:?}");
         assert!(!result.contains("1."), "{result:?}");
+    }
+
+    #[test]
+    fn ordered_list_numbering_continues_after_task_item() {
+        let result = render_document("1. [x] first\n2. second\n3. third\n", None, &test_config(80)).unwrap();
+        assert!(result.contains("2.\x1b[0m second"), "{result:?}");
+        assert!(result.contains("3.\x1b[0m third"), "{result:?}");
     }
 
     #[test]
