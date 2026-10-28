@@ -6,6 +6,7 @@
 //! the annotation's comment and replies are printed after its paragraph.
 //! Read-only: accepting and rejecting stay with `folio accept` / `folio reject`.
 
+use crate::render::{render_document, Config};
 use folio::sidecar::{Annotation, AnnotationKind, Sidecar};
 use std::cell::RefCell;
 use std::collections::BTreeSet;
@@ -260,10 +261,10 @@ fn note(mark: &Mark, show_change: bool, indent: usize, width: usize) -> String {
         lines.push(change(a));
     }
     if let Some(c) = &a.comment {
-        lines.push(wrap(c, wrap_width));
+        lines.push(markdown(c, wrap_width));
     }
     for r in &a.replies {
-        lines.push(format!("\x1b[2m↳ {}/{}:\x1b[0m {}", r.source, r.author, wrap(&r.body, wrap_width)));
+        lines.push(format!("\x1b[2m↳ {}/{}:\x1b[0m {}", r.source, r.author, markdown(&r.body, wrap_width)));
     }
     let mut out = String::new();
     for line in lines.join("\n").lines() {
@@ -285,22 +286,24 @@ fn change(a: &Annotation) -> String {
     }
 }
 
-fn wrap(text: &str, width: usize) -> String {
-    let mut out = String::new();
-    let mut len = 0;
-    for word in text.split_whitespace() {
-        let w = word.chars().count();
-        if len > 0 && len + 1 + w > width.max(20) {
-            out.push('\n');
-            len = 0;
-        } else if len > 0 {
-            out.push(' ');
-            len += 1;
-        }
-        out.push_str(word);
-        len += w;
+/// A comment or reply body, which is markdown, rendered to `width` columns.
+/// Falls back to the plain text if it can't be rendered.
+fn markdown(text: &str, width: usize) -> String {
+    let config = Config {
+        width: width.max(20) as u16,
+        images: false,
+        mermaid: false,
+        mermaid_binary: String::new(),
+        theme: "base16-ocean.dark".into(),
+        image_protocol: None,
+        kitty_store: None,
+        annotations: false,
+        overlay: None,
+    };
+    match render_document(text, None, &config) {
+        Ok(out) => out.trim().to_string(),
+        Err(_) => text.trim().to_string(),
     }
-    out
 }
 
 /// `(text byte, source byte)` at each char of `text` and at its end, walking
@@ -345,7 +348,6 @@ fn floor_char_boundary(s: &str, mut i: usize) -> usize {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::render::{render_document, Config};
     use folio::sidecar::AnnotationSource;
     use std::rc::Rc;
 
@@ -380,6 +382,25 @@ mod tests {
             overlay: Overlay::new(md, annotations).map(Rc::new),
         };
         render_document(md, None, &config).unwrap()
+    }
+
+    #[test]
+    fn comments_and_replies_are_rendered_as_markdown() {
+        let mut a = ann(AnnotationKind::Comment, "Body", None, None);
+        a.comment = Some("Use **bold** and `code`.\n\n- one\n- two".into());
+        a.replies.push(folio::sidecar::ThreadReply {
+            id: "r1".into(),
+            author: "me".into(),
+            source: AnnotationSource::Local,
+            body: "*thanks*".into(),
+            created: String::new(),
+        });
+        let out = render("Body.\n", vec![a]);
+        assert!(!out.contains("**bold**") && !out.contains("`code`") && !out.contains("*thanks*"), "{out:?}");
+        assert!(out.contains("\x1b[1mbold"), "{out:?}");
+        assert!(out.contains("one") && out.contains("two"), "{out:?}");
+        let list = out.lines().filter(|l| l.contains("one") || l.contains("two")).count();
+        assert_eq!(list, 2, "{out:?}");
     }
 
     #[test]
