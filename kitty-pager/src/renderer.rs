@@ -59,6 +59,39 @@ pub(crate) fn strip_ansi(s: &str) -> String {
     out
 }
 
+/// Wrap `line` in reverse video, re-enabling it after every SGR sequence in
+/// the line so that embedded resets (e.g. `\x1b[0m` after inline code) do not
+/// cut the highlight short.
+pub(crate) fn highlight_line(line: &str) -> String {
+    let mut out = String::with_capacity(line.len() + 16);
+    out.push_str("\x1b[7m");
+    let mut chars = line.chars();
+    while let Some(c) = chars.next() {
+        out.push(c);
+        if c != '\x1b' {
+            continue;
+        }
+        match chars.next() {
+            Some('[') => {
+                out.push('[');
+                for c2 in chars.by_ref() {
+                    out.push(c2);
+                    if ('\x40'..='\x7e').contains(&c2) {
+                        if c2 == 'm' {
+                            out.push_str("\x1b[7m");
+                        }
+                        break;
+                    }
+                }
+            }
+            Some(c2) => out.push(c2),
+            None => {}
+        }
+    }
+    out.push_str("\x1b[0m");
+    out
+}
+
 /// Build a flat list of terminal rows from a document.
 ///
 /// Text items are split on `\n`; each line becomes one `LayoutEntry`.
@@ -122,6 +155,7 @@ pub(crate) fn layout(doc: &KittyDocument, cell_px_width: u32, cell_px_height: u3
 ///
 /// `status_text`: appended to the status bar.  Pass the search prompt during
 /// input mode, the active query indicator in normal mode, or an empty string.
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn render_frame(
     doc: &KittyDocument,
     layout: &[LayoutEntry],
@@ -157,9 +191,7 @@ pub(crate) fn render_frame(
                 let highlighted = !query_lower.is_empty()
                     && strip_ansi(line).to_lowercase().contains(&query_lower);
                 if highlighted {
-                    out.push_str("\x1b[7m");
-                    out.push_str(line);
-                    out.push_str("\x1b[0m");
+                    out.push_str(&highlight_line(line));
                 } else {
                     out.push_str(line);
                 }
@@ -610,6 +642,36 @@ mod tests {
     }
 
     #[test]
+    fn render_frame_highlight_survives_embedded_reset() {
+        let doc = make_doc(vec![DocItem::Text(
+            "some \x1b[96m code \x1b[0m here and \x1b[1mbold\x1b[0m text".to_string(),
+        )]);
+        let entries = layout(&doc, 8, 16);
+        let mut transmitted = HashSet::new();
+        let frame = render_frame(&doc, &entries, 0, 24, 8, 16, &mut transmitted, "text", "");
+        // Reverse video is re-enabled after each reset, so the match at the
+        // end of the line is still highlighted.
+        assert!(frame.contains("\x1b[0m\x1b[7m text\x1b[0m"), "frame: {frame:?}");
+    }
+
+    #[test]
+    fn highlight_line_reenables_reverse_after_every_sgr() {
+        assert_eq!(highlight_line("plain"), "\x1b[7mplain\x1b[0m");
+        assert_eq!(
+            highlight_line("a\x1b[0mb\x1b[1;34mc"),
+            "\x1b[7ma\x1b[0m\x1b[7mb\x1b[1;34m\x1b[7mc\x1b[0m"
+        );
+    }
+
+    #[test]
+    fn highlight_line_leaves_non_sgr_sequences_alone() {
+        // Cursor movement (CSI ... H) and OSC 8 links are passed through untouched.
+        assert_eq!(highlight_line("\x1b[2Hx"), "\x1b[7m\x1b[2Hx\x1b[0m");
+        let link = "\x1b]8;;https://example.com\x1b\\link\x1b]8;;\x1b\\";
+        assert_eq!(highlight_line(link), format!("\x1b[7m{link}\x1b[0m"));
+    }
+
+    #[test]
     fn strip_ansi_removes_csi_sequences() {
         assert_eq!(strip_ansi("\x1b[1mhello\x1b[0m"), "hello");
         assert_eq!(strip_ansi("\x1b[38;5;200mcolor\x1b[0m"), "color");
@@ -619,7 +681,7 @@ mod tests {
     #[test]
     fn strip_ansi_removes_apc_sequences() {
         // APC used by Kitty graphics protocol
-        let s = format!("text\x1b_Ga=t;\x1b\\more");
-        assert_eq!(strip_ansi(&s), "textmore");
+        let s = "text\x1b_Ga=t;\x1b\\more";
+        assert_eq!(strip_ansi(s), "textmore");
     }
 }
