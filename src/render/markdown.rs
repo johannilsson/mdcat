@@ -23,6 +23,10 @@ pub fn render_document(markdown: &str, base_dir: Option<&Path>, config: &Config)
 
     let mut output = String::new();
     render_node(root, &mut output, base_dir, config, 0, false)?;
+    #[cfg(feature = "annotations")]
+    if let Some(overlay) = &config.overlay {
+        output.push_str(&overlay.leftovers(config.width as usize));
+    }
     Ok(output)
 }
 
@@ -46,21 +50,29 @@ fn render_node<'a>(
 
         NodeValue::Heading(NodeHeading { level, .. }) => {
             let level = *level;
+            let sourcepos = data.sourcepos;
             drop(data);
 
+            // Annotations in the heading go back to its colour after a coloured span.
+            let fg = match level {
+                1 => "\x1b[34m",
+                2 => "\x1b[36m",
+                3 => "\x1b[33m",
+                _ => "\x1b[39m",
+            };
             let mut text = String::new();
-            collect_text(node, &mut text);
+            collect_marked_text(node, &mut text, config, fg);
             let width = config.width as usize;
 
             match level {
                 1 => {
-                    let line = "═".repeat(width.min(text.chars().count() + 4));
+                    let line = "═".repeat(width.min(visible_len(&text) + 4));
                     output.push_str(&format!("\n\x1b[1;34m{line}\x1b[0m\n"));
                     output.push_str(&format!("\x1b[1;34m  {text}\x1b[0m\n"));
                     output.push_str(&format!("\x1b[1;34m{line}\x1b[0m\n\n"));
                 }
                 2 => {
-                    let line = "─".repeat(width.min(text.chars().count() + 2));
+                    let line = "─".repeat(width.min(visible_len(&text) + 2));
                     output.push_str(&format!("\n\x1b[1;36m{text}\x1b[0m\n"));
                     output.push_str(&format!("\x1b[36m{line}\x1b[0m\n\n"));
                 }
@@ -68,6 +80,7 @@ fn render_node<'a>(
                 4 => output.push_str(&format!("\n\x1b[1m#### {text}\x1b[0m\n\n")),
                 _ => output.push_str(&format!("\n\x1b[1m{text}\x1b[0m\n\n")),
             }
+            push_block_notes(sourcepos, output, indent, config);
         }
 
         NodeValue::Paragraph => {
@@ -79,6 +92,10 @@ fn render_node<'a>(
             let prefix = " ".repeat(indent);
             let wrapped = word_wrap(&inline_out, config.width as usize, indent);
             output.push_str(&format!("{prefix}{wrapped}\n"));
+            #[cfg(feature = "annotations")]
+            if let Some(overlay) = &config.overlay {
+                output.push_str(&overlay.take_notes(indent, config.width as usize));
+            }
             if !in_tight_list {
                 output.push('\n');
             }
@@ -164,8 +181,10 @@ fn render_node<'a>(
         }
 
         NodeValue::Table(_) => {
+            let sourcepos = data.sourcepos;
             drop(data);
             render_table(node, output, config)?;
+            push_block_notes(sourcepos, output, indent, config);
         }
 
         NodeValue::FootnoteDefinition(def) => {
@@ -210,6 +229,26 @@ fn render_node<'a>(
     Ok(())
 }
 
+/// The notes of the annotations in a heading or table, right under it.
+#[cfg(feature = "annotations")]
+fn push_block_notes(sourcepos: comrak::nodes::Sourcepos, output: &mut String, indent: usize, config: &Config) {
+    let Some(overlay) = &config.overlay else { return };
+    let Some((start, end)) = overlay.byte_range(sourcepos) else { return };
+    overlay.claim_block(start, end);
+    let notes = overlay.take_notes(indent, config.width as usize);
+    if notes.is_empty() {
+        return;
+    }
+    // The notes end with their own blank line; keep one, not two.
+    if output.ends_with("\n\n") {
+        output.pop();
+    }
+    output.push_str(&notes);
+}
+
+#[cfg(not(feature = "annotations"))]
+fn push_block_notes(_: comrak::nodes::Sourcepos, _: &mut String, _: usize, _: &Config) {}
+
 fn render_inline<'a>(
     node: &'a AstNode<'a>,
     output: &mut String,
@@ -220,6 +259,13 @@ fn render_inline<'a>(
 
     match &data.value {
         NodeValue::Text(text) => {
+            #[cfg(feature = "annotations")]
+            if let Some(overlay) = &config.overlay {
+                if let Some((start, end)) = overlay.byte_range(data.sourcepos) {
+                    output.push_str(&overlay.style_text(text, start, end, crate::render::annotations::DEFAULT_FG));
+                    return Ok(());
+                }
+            }
             output.push_str(text);
             drop(data);
         }
@@ -365,7 +411,7 @@ fn render_table<'a>(node: &'a AstNode<'a>, output: &mut String, config: &Config)
         let mut cells: Vec<String> = Vec::new();
         for cell in row.children() {
             let mut cell_text = String::new();
-            collect_text(cell, &mut cell_text);
+            collect_marked_text(cell, &mut cell_text, config, "\x1b[39m");
             cells.push(cell_text);
         }
         rows.push(cells);
@@ -380,7 +426,7 @@ fn render_table<'a>(node: &'a AstNode<'a>, output: &mut String, config: &Config)
     let mut col_widths: Vec<usize> = vec![0; cols];
     for row in &rows {
         for (i, cell) in row.iter().enumerate() {
-            col_widths[i] = col_widths[i].max(cell.chars().count());
+            col_widths[i] = col_widths[i].max(visible_len(cell));
         }
     }
 
@@ -402,9 +448,9 @@ fn render_table<'a>(node: &'a AstNode<'a>, output: &mut String, config: &Config)
         let cells: String = row.iter().enumerate().map(|(j, cell)| {
             let width = col_widths.get(j).copied().unwrap_or(0);
             if i == 0 {
-                format!(" \x1b[1m{:<width$}\x1b[0m ", cell)
+                format!(" \x1b[1m{}\x1b[0m ", pad(cell, width))
             } else {
-                format!(" {:<width$} ", cell)
+                format!(" {} ", pad(cell, width))
             }
         }).collect::<Vec<_>>().join("\x1b[2m│\x1b[0m");
 
@@ -421,7 +467,7 @@ fn render_table<'a>(node: &'a AstNode<'a>, output: &mut String, config: &Config)
 
 fn render_stacked_table(rows: &[Vec<String>], output: &mut String, width: usize) {
     let headers = &rows[0];
-    let label_width = headers.iter().map(|h| h.chars().count()).max().unwrap_or(0);
+    let label_width = headers.iter().map(|h| visible_len(h)).max().unwrap_or(0);
 
     // No body rows to stack: show the headers so the table isn't silently dropped.
     if rows.len() == 1 {
@@ -446,10 +492,43 @@ fn render_stacked_table(rows: &[Vec<String>], output: &mut String, width: usize)
 
         for (j, header) in headers.iter().enumerate() {
             let value = row.get(j).map(|s| s.as_str()).unwrap_or("");
-            output.push_str(&format!("\x1b[1m{:<label_width$}\x1b[0m : {}\n", header, value));
+            output.push_str(&format!("\x1b[1m{}\x1b[0m : {}\n", pad(header, label_width), value));
         }
         output.push('\n');
     }
+}
+
+/// `s` padded with spaces to `width` columns, not counting escape codes.
+fn pad(s: &str, width: usize) -> String {
+    format!("{s}{}", " ".repeat(width.saturating_sub(visible_len(s))))
+}
+
+/// `collect_text`, with the Folio annotations in it drawn into the text
+/// (`fg` is the colour to go back to after a coloured span).
+#[allow(unused_variables)]
+fn collect_marked_text<'a>(node: &'a AstNode<'a>, output: &mut String, config: &Config, fg: &str) {
+    #[cfg(feature = "annotations")]
+    if let Some(overlay) = &config.overlay {
+        let data = node.data.borrow();
+        match &data.value {
+            NodeValue::Text(text) => match overlay.byte_range(data.sourcepos) {
+                Some((start, end)) => output.push_str(&overlay.style_text(text, start, end, fg)),
+                None => output.push_str(text),
+            },
+            NodeValue::Code(_) | NodeValue::SoftBreak | NodeValue::LineBreak => {
+                drop(data);
+                collect_text(node, output);
+            }
+            _ => {
+                drop(data);
+                for child in node.children() {
+                    collect_marked_text(child, output, config, fg);
+                }
+            }
+        }
+        return;
+    }
+    collect_text(node, output);
 }
 
 /// Collect all plain text from a node and its children.
@@ -560,6 +639,10 @@ mod tests {
             theme: String::new(),
             image_protocol: None,
             kitty_store: None,
+            #[cfg(feature = "annotations")]
+            annotations: false,
+            #[cfg(feature = "annotations")]
+            overlay: None,
         }
     }
 
