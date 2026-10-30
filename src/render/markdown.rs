@@ -345,12 +345,15 @@ fn render_list_item<'a>(
 fn render_code_block(code: &str, lang: &str, config: &Config, indent: usize) -> String {
     let highlighted = highlight_code(code, lang, &config.theme);
     let width = (config.width as usize).saturating_sub(indent);
-    let line = "─".repeat(width.min(60));
+    let inner = width.min(60);
+    let line = "─".repeat(inner);
     let lang_label = if lang.is_empty() { String::new() } else { format!(" {lang} ") };
+    // The label replaces part of the top border so both borders are equally wide.
+    let top_line = "─".repeat(inner.saturating_sub(lang_label.chars().count()));
 
     let pad = " ".repeat(indent);
     let mut out = String::new();
-    out.push_str(&format!("{pad}\x1b[2m┌{lang_label}{line}┐\x1b[0m\n"));
+    out.push_str(&format!("{pad}\x1b[2m┌{lang_label}{top_line}┐\x1b[0m\n"));
     for line_str in highlighted.lines() {
         out.push_str(&format!("{pad}\x1b[2m│\x1b[0m {line_str}\n"));
     }
@@ -562,6 +565,26 @@ mod tests {
             image_protocol: None,
             kitty_store: None,
         }
+    }
+
+    fn code_block_borders(result: &str) -> (usize, usize) {
+        let top = result.lines().find(|l| l.contains('┌')).expect("top border");
+        let bottom = result.lines().find(|l| l.contains('└')).expect("bottom border");
+        (visible_len(top), visible_len(bottom))
+    }
+
+    #[test]
+    fn code_block_borders_match_with_language_label() {
+        let result = render_code_block("fn main() {}\n", "rust", &test_config(80), 0);
+        let (top, bottom) = code_block_borders(&result);
+        assert_eq!(top, bottom, "got: {result:?}");
+    }
+
+    #[test]
+    fn code_block_borders_match_without_language_label() {
+        let result = render_code_block("plain\n", "", &test_config(80), 0);
+        let (top, bottom) = code_block_borders(&result);
+        assert_eq!(top, bottom, "got: {result:?}");
     }
 
     #[test]
