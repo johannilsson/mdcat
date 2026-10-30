@@ -429,6 +429,12 @@ dependencies = [
 ]
 
 [[package]]
+name = "dunce"
+version = "1.0.5"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "92773504d58c093f6de2459af4af33faa518c13451eb8f2b5698ed3d36e7c813"
+
+[[package]]
 name = "emojis"
 version = "0.9.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -560,10 +566,11 @@ checksum = "d9c4f5dac5e15c24eb999c26181a6ca40b39fe946cbe4c263c7209467bc83af2"
 [[package]]
 name = "folio"
 version = "0.1.0"
-source = "git+https://github.com/johannilsson/folio#fd5d1ead3f3c0a2d1e2f1d46ce959c89e7519d79"
+source = "git+https://github.com/johannilsson/folio?rev=4778a5f0b43e6c3b86443ccba1dad8936eef07f3#4778a5f0b43e6c3b86443ccba1dad8936eef07f3"
 dependencies = [
  "anyhow",
  "clap",
+ "dunce",
  "serde",
  "serde_json",
  "toml_edit",

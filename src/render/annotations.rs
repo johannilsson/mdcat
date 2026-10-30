@@ -46,7 +46,7 @@ pub struct Overlay {
 impl Overlay {
     /// The pending annotations in `file`'s sidecar, or `None` when it has none.
     pub fn load(file: &Path, markdown: &str) -> anyhow::Result<Option<Self>> {
-        let sidecar_path = folio::commands::folio_path(file);
+        let sidecar_path = folio::location::folio_path(file);
         if !sidecar_path.exists() {
             return Ok(None);
         }
