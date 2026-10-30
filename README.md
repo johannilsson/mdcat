@@ -115,8 +115,19 @@ cargo clippy --all-features -- -D warnings
 cargo run -- test.md
 ```
 
-Design decisions are recorded in [`docs/adr`](docs/adr). The Markdown used for
-the screenshots lives in [`docs/screenshots`](docs/screenshots).
+Design decisions are recorded in [`docs/adr`](docs/adr).
+
+The screenshots are generated from the Markdown in
+[`docs/screenshots`](docs/screenshots) by replaying mdcat's output in
+xterm.js inside headless Chromium. To regenerate them (needs Node and `mmdc`):
+
+```bash
+cargo build --release
+cd docs/screenshots
+npm ci
+npx playwright install chromium
+npm run shoot
+```
 
 ## License
 
