@@ -111,12 +111,12 @@ fn render_node<'a>(
                     Ok(img_str) => output.push_str(&img_str),
                     Err(e) => {
                         eprintln!("mdcat: mermaid render failed: {e}");
-                        output.push_str(&render_code_block(&code, "", config));
+                        output.push_str(&render_code_block(&code, "", config, indent));
                         output.push_str("\x1b[2m[Install mmdc to render Mermaid diagrams: npm install -g @mermaid-js/mermaid-cli]\x1b[0m\n\n");
                     }
                 }
             } else {
-                output.push_str(&render_code_block(&code, &lang, config));
+                output.push_str(&render_code_block(&code, &lang, config, indent));
             }
         }
 
@@ -349,21 +349,22 @@ fn render_list_item<'a>(
     Ok(())
 }
 
-fn render_code_block(code: &str, lang: &str, config: &Config) -> String {
+fn render_code_block(code: &str, lang: &str, config: &Config, indent: usize) -> String {
     let highlighted = highlight_code(code, lang, &config.theme);
-    let width = config.width as usize;
+    let width = (config.width as usize).saturating_sub(indent);
     let inner = width.min(60);
     let line = "─".repeat(inner);
     let lang_label = if lang.is_empty() { String::new() } else { format!(" {lang} ") };
     // The label replaces part of the top border so both borders are equally wide.
     let top_line = "─".repeat(inner.saturating_sub(lang_label.chars().count()));
 
+    let pad = " ".repeat(indent);
     let mut out = String::new();
-    out.push_str(&format!("\x1b[2m┌{lang_label}{top_line}┐\x1b[0m\n"));
+    out.push_str(&format!("{pad}\x1b[2m┌{lang_label}{top_line}┐\x1b[0m\n"));
     for line_str in highlighted.lines() {
-        out.push_str(&format!("\x1b[2m│\x1b[0m {line_str}\n"));
+        out.push_str(&format!("{pad}\x1b[2m│\x1b[0m {line_str}\n"));
     }
-    out.push_str(&format!("\x1b[2m└{line}┘\x1b[0m\n\n"));
+    out.push_str(&format!("{pad}\x1b[2m└{line}┘\x1b[0m\n\n"));
     out
 }
 
@@ -581,14 +582,14 @@ mod tests {
 
     #[test]
     fn code_block_borders_match_with_language_label() {
-        let result = render_code_block("fn main() {}\n", "rust", &test_config(80));
+        let result = render_code_block("fn main() {}\n", "rust", &test_config(80), 0);
         let (top, bottom) = code_block_borders(&result);
         assert_eq!(top, bottom, "got: {result:?}");
     }
 
     #[test]
     fn code_block_borders_match_without_language_label() {
-        let result = render_code_block("plain\n", "", &test_config(80));
+        let result = render_code_block("plain\n", "", &test_config(80), 0);
         let (top, bottom) = code_block_borders(&result);
         assert_eq!(top, bottom, "got: {result:?}");
     }
@@ -757,5 +758,15 @@ mod tests {
         for h in ["alpha", "beta", "gamma"] {
             assert!(result.contains(h), "missing {h}: {result:?}");
         }
+    }
+
+    #[test]
+    fn code_block_in_list_item_is_indented() {
+        let md = "- item\n\n  ```\n  code\n  ```\n";
+        let result = render_document(md, None, &test_config(80)).unwrap();
+        for line in result.lines().filter(|l| l.contains('┌') || l.contains('│') || l.contains('└')) {
+            assert!(line.starts_with("  \x1b[2m"), "code block line not indented: {line:?}");
+        }
+        assert!(result.contains('┌'), "{result:?}");
     }
 }
