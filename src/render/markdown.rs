@@ -94,6 +94,8 @@ fn render_node<'a>(
                 render_node(child, &mut inner, base_dir, &inner_config, 0, false)?;
             }
             for line in inner.lines() {
+                // Inline resets (\x1b[0m) would end the quote's italics; re-apply after each.
+                let line = line.replace("\x1b[0m", "\x1b[0m\x1b[3m");
                 output.push_str(&format!("\x1b[2m│\x1b[0m \x1b[3m{line}\x1b[0m\n"));
             }
             output.push('\n');
@@ -736,6 +738,16 @@ mod tests {
         for line in result.lines() {
             assert!(visible_len(line) <= 40, "line exceeds width: {line:?}");
         }
+    }
+
+    #[test]
+    fn blockquote_italics_survive_inline_resets() {
+        let md = "> before **bold** after";
+        let result = render_document(md, None, &test_config(80)).unwrap();
+        assert!(
+            result.contains("\x1b[0m\x1b[3m after"),
+            "italics not restored after inline reset: {result:?}"
+        );
     }
 
     #[test]
