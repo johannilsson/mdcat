@@ -132,17 +132,16 @@ fn render_node<'a>(
             let mut counter = start;
             for child in node.children() {
                 let child_data = child.data.borrow();
+                // Task items still occupy a position in an ordered list.
+                let number = counter;
+                counter += 1;
                 let bullet = match &child_data.value {
                     NodeValue::TaskItem(checked) => {
                         if checked.symbol.is_some() { "☑".to_string() } else { "☐".to_string() }
                     }
                     _ => match list_type {
                         ListType::Bullet => "•".to_string(),
-                        ListType::Ordered => {
-                            let s = format!("{counter}.");
-                            counter += 1;
-                            s
-                        }
+                        ListType::Ordered => format!("{number}."),
                     },
                 };
                 drop(child_data);
@@ -169,9 +168,10 @@ fn render_node<'a>(
             render_table(node, output, config)?;
         }
 
-        NodeValue::FootnoteDefinition(_) => {
+        NodeValue::FootnoteDefinition(def) => {
+            let label = format!("[{}]:", def.name);
             drop(data);
-            // TODO: collect footnotes and render at end
+            render_list_item(node, output, base_dir, config, indent, false, &label)?;
         }
 
         NodeValue::FrontMatter(content) => {
@@ -227,6 +227,12 @@ fn render_inline<'a>(
         NodeValue::SoftBreak => {
             output.push(' ');
             drop(data);
+        }
+
+        NodeValue::FootnoteReference(reference) => {
+            let name = reference.name.clone();
+            drop(data);
+            output.push_str(&format!("\x1b[2m[{name}]\x1b[0m"));
         }
 
         NodeValue::LineBreak => {
@@ -344,11 +350,14 @@ fn render_list_item<'a>(
 fn render_code_block(code: &str, lang: &str, config: &Config) -> String {
     let highlighted = highlight_code(code, lang, &config.theme);
     let width = config.width as usize;
-    let line = "─".repeat(width.min(60));
+    let inner = width.min(60);
+    let line = "─".repeat(inner);
     let lang_label = if lang.is_empty() { String::new() } else { format!(" {lang} ") };
+    // The label replaces part of the top border so both borders are equally wide.
+    let top_line = "─".repeat(inner.saturating_sub(lang_label.chars().count()));
 
     let mut out = String::new();
-    out.push_str(&format!("\x1b[2m┌{lang_label}{line}┐\x1b[0m\n"));
+    out.push_str(&format!("\x1b[2m┌{lang_label}{top_line}┐\x1b[0m\n"));
     for line_str in highlighted.lines() {
         out.push_str(&format!("\x1b[2m│\x1b[0m {line_str}\n"));
     }
@@ -421,6 +430,15 @@ fn render_table<'a>(node: &'a AstNode<'a>, output: &mut String, config: &Config)
 fn render_stacked_table(rows: &[Vec<String>], output: &mut String, width: usize) {
     let headers = &rows[0];
     let label_width = headers.iter().map(|h| h.chars().count()).max().unwrap_or(0);
+
+    // No body rows to stack: show the headers so the table isn't silently dropped.
+    if rows.len() == 1 {
+        for header in headers {
+            output.push_str(&format!("\x1b[1m{header}\x1b[0m\n"));
+        }
+        output.push('\n');
+        return;
+    }
 
     for (i, row) in rows[1..].iter().enumerate() {
         let row_label = format!(" Row {} ", i + 1);
@@ -553,6 +571,41 @@ mod tests {
         }
     }
 
+    fn code_block_borders(result: &str) -> (usize, usize) {
+        let top = result.lines().find(|l| l.contains('┌')).expect("top border");
+        let bottom = result.lines().find(|l| l.contains('└')).expect("bottom border");
+        (visible_len(top), visible_len(bottom))
+    }
+
+    #[test]
+    fn code_block_borders_match_with_language_label() {
+        let result = render_code_block("fn main() {}\n", "rust", &test_config(80));
+        let (top, bottom) = code_block_borders(&result);
+        assert_eq!(top, bottom, "got: {result:?}");
+    }
+
+    #[test]
+    fn code_block_borders_match_without_language_label() {
+        let result = render_code_block("plain\n", "", &test_config(80));
+        let (top, bottom) = code_block_borders(&result);
+        assert_eq!(top, bottom, "got: {result:?}");
+    }
+
+    #[test]
+    fn footnote_reference_is_rendered() {
+        let md = "Hello[^1]\n\n[^1]: The note";
+        let result = render_document(md, None, &test_config(80)).unwrap();
+        assert!(result.contains("Hello\x1b[2m[1]\x1b[0m"), "got: {result:?}");
+    }
+
+    #[test]
+    fn footnote_definition_is_rendered() {
+        let md = "Hello[^note]\n\n[^note]: The note text";
+        let result = render_document(md, None, &test_config(80)).unwrap();
+        assert!(result.contains("[note]:"), "got: {result:?}");
+        assert!(result.contains("The note text"), "got: {result:?}");
+    }
+
     #[test]
     fn frontmatter_wraps_long_lines() {
         let md = "---\ntitle: This is a very long title that should definitely wrap at the given terminal width\n---\n\nBody text.";
@@ -599,6 +652,13 @@ mod tests {
         assert!(result.contains("3.\x1b[0m"), "{result:?}");
         assert!(result.contains("4.\x1b[0m"), "{result:?}");
         assert!(!result.contains("1."), "{result:?}");
+    }
+
+    #[test]
+    fn ordered_list_numbering_continues_after_task_item() {
+        let result = render_document("1. [x] first\n2. second\n3. third\n", None, &test_config(80)).unwrap();
+        assert!(result.contains("2.\x1b[0m second"), "{result:?}");
+        assert!(result.contains("3.\x1b[0m third"), "{result:?}");
     }
 
     #[test]
@@ -676,5 +736,14 @@ mod tests {
         assert!(result.contains("•\x1b[0m c\n"), "{result:?}");
         assert_eq!(result.matches('•').count(), 3);
         assert_eq!(result.lines().filter(|l| l.contains('•')).count(), 3, "{result:?}");
+    }
+
+    #[test]
+    fn header_only_table_wider_than_terminal_is_not_dropped() {
+        let md = "| alpha | beta | gamma |\n|---|---|---|\n";
+        let result = render_document(md, None, &test_config(10)).unwrap();
+        for h in ["alpha", "beta", "gamma"] {
+            assert!(result.contains(h), "missing {h}: {result:?}");
+        }
     }
 }
