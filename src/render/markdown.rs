@@ -708,6 +708,16 @@ mod tests {
     }
 
     #[test]
+    fn empty_list_item_ends_its_line() {
+        let result = render_document("- a\n-\n- c\n", None, &test_config(80)).unwrap();
+        assert!(result.contains("•\x1b[0m a\n"), "{result:?}");
+        assert!(result.contains("•\x1b[0m \n"), "{result:?}");
+        assert!(result.contains("•\x1b[0m c\n"), "{result:?}");
+        assert_eq!(result.matches('•').count(), 3);
+        assert_eq!(result.lines().filter(|l| l.contains('•')).count(), 3, "{result:?}");
+    }
+
+    #[test]
     fn nested_list_item_indent_is_preserved() {
         let result = render_document("- a\n  - b\n", None, &test_config(80)).unwrap();
         assert!(result.contains("\n  \x1b[1m•\x1b[0m b\n"), "{result:?}");
@@ -726,16 +736,6 @@ mod tests {
         for line in result.lines() {
             assert!(visible_len(line) <= 40, "line exceeds width: {line:?}");
         }
-    }
-
-    #[test]
-    fn empty_list_item_ends_its_line() {
-        let result = render_document("- a\n-\n- c\n", None, &test_config(80)).unwrap();
-        assert!(result.contains("•\x1b[0m a\n"), "{result:?}");
-        assert!(result.contains("•\x1b[0m \n"), "{result:?}");
-        assert!(result.contains("•\x1b[0m c\n"), "{result:?}");
-        assert_eq!(result.matches('•').count(), 3);
-        assert_eq!(result.lines().filter(|l| l.contains('•')).count(), 3, "{result:?}");
     }
 
     #[test]
