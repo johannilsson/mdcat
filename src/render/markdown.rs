@@ -95,7 +95,9 @@ fn render_node<'a>(
             }
             for line in inner.lines() {
                 // Inline resets (\x1b[0m) would end the quote's italics; re-apply after each.
-                let line = line.replace("\x1b[0m", "\x1b[0m\x1b[3m");
+                let line = line
+                    .replace("\x1b[0m", "\x1b[0m\x1b[3m")
+                    .replace("\x1b[23m", "\x1b[23m\x1b[3m");
                 output.push_str(&format!("\x1b[2m│\x1b[0m \x1b[3m{line}\x1b[0m\n"));
             }
             output.push('\n');
@@ -248,7 +250,8 @@ fn render_inline<'a>(
             for child in node.children() {
                 render_inline(child, output, base_dir, config)?;
             }
-            output.push_str("\x1b[0m");
+            // Switch off only bold so enclosing styles stay active.
+            output.push_str("\x1b[22m");
         }
 
         NodeValue::Emph => {
@@ -257,7 +260,7 @@ fn render_inline<'a>(
             for child in node.children() {
                 render_inline(child, output, base_dir, config)?;
             }
-            output.push_str("\x1b[0m");
+            output.push_str("\x1b[23m");
         }
 
         NodeValue::Strikethrough => {
@@ -266,13 +269,13 @@ fn render_inline<'a>(
             for child in node.children() {
                 render_inline(child, output, base_dir, config)?;
             }
-            output.push_str("\x1b[0m");
+            output.push_str("\x1b[29m");
         }
 
         NodeValue::Code(code) => {
             let text = code.literal.clone();
             drop(data);
-            output.push_str(&format!("\x1b[48;5;236m\x1b[96m {text} \x1b[0m"));
+            output.push_str(&format!("\x1b[48;5;236m\x1b[96m {text} \x1b[49m\x1b[39m"));
         }
 
         NodeValue::Link(link) => {
@@ -745,10 +748,9 @@ mod tests {
     fn blockquote_italics_survive_inline_resets() {
         let md = "> before **bold** after";
         let result = render_document(md, None, &test_config(80)).unwrap();
-        assert!(
-            result.contains("\x1b[0m\x1b[3m after"),
-            "italics not restored after inline reset: {result:?}"
-        );
+        // Closing bold must not cancel the quote's italics.
+        assert!(result.contains("bold\x1b[22m after"), "{result:?}");
+        assert!(!result.contains("\x1b[0m after"), "{result:?}");
     }
 
     #[test]
@@ -768,5 +770,26 @@ mod tests {
             assert!(line.starts_with("  \x1b[2m"), "code block line not indented: {line:?}");
         }
         assert!(result.contains('┌'), "{result:?}");
+    }
+
+    #[test]
+    fn nested_emphasis_keeps_outer_bold() {
+        let result = render_document("**bold *both* still bold**", None, &test_config(80)).unwrap();
+        // The inner span must only switch off italics, not reset the surrounding bold.
+        assert!(result.contains("both\x1b[23m"), "{result:?}");
+        assert!(!result.contains("both\x1b[0m"), "{result:?}");
+        assert!(result.ends_with("still bold\x1b[22m\n\n"), "{result:?}");
+    }
+
+    #[test]
+    fn code_span_inside_bold_keeps_bold() {
+        let result = render_document("**a `c` b**", None, &test_config(80)).unwrap();
+        assert!(!result.contains("c \x1b[0m"), "{result:?}");
+    }
+
+    #[test]
+    fn blockquote_italics_survive_nested_emphasis() {
+        let result = render_document("> a *b* c", None, &test_config(80)).unwrap();
+        assert!(result.contains("\x1b[23m\x1b[3m c"), "{result:?}");
     }
 }
