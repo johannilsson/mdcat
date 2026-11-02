@@ -2,6 +2,7 @@ use anyhow::Result;
 use comrak::{Arena, Options, parse_document};
 use comrak::nodes::{AstNode, NodeValue, NodeHeading, ListType};
 use std::path::Path;
+use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 use crate::render::Config;
 use crate::render::code::highlight_code;
 use crate::render::images::render_image;
@@ -54,13 +55,13 @@ fn render_node<'a>(
 
             match level {
                 1 => {
-                    let line = "═".repeat(width.min(text.chars().count() + 4));
+                    let line = "═".repeat(width.min(display_width(&text) + 4));
                     output.push_str(&format!("\n\x1b[1;34m{line}\x1b[0m\n"));
                     output.push_str(&format!("\x1b[1;34m  {text}\x1b[0m\n"));
                     output.push_str(&format!("\x1b[1;34m{line}\x1b[0m\n\n"));
                 }
                 2 => {
-                    let line = "─".repeat(width.min(text.chars().count() + 2));
+                    let line = "─".repeat(width.min(display_width(&text) + 2));
                     output.push_str(&format!("\n\x1b[1;36m{text}\x1b[0m\n"));
                     output.push_str(&format!("\x1b[36m{line}\x1b[0m\n\n"));
                 }
@@ -394,7 +395,7 @@ fn render_table<'a>(node: &'a AstNode<'a>, output: &mut String, config: &Config)
     let mut col_widths: Vec<usize> = vec![0; cols];
     for row in &rows {
         for (i, cell) in row.iter().enumerate() {
-            col_widths[i] = col_widths[i].max(cell.chars().count());
+            col_widths[i] = col_widths[i].max(display_width(cell));
         }
     }
 
@@ -416,9 +417,9 @@ fn render_table<'a>(node: &'a AstNode<'a>, output: &mut String, config: &Config)
         let cells: String = row.iter().enumerate().map(|(j, cell)| {
             let width = col_widths.get(j).copied().unwrap_or(0);
             if i == 0 {
-                format!(" \x1b[1m{:<width$}\x1b[0m ", cell)
+                format!(" \x1b[1m{}\x1b[0m ", pad_to(cell, width))
             } else {
-                format!(" {:<width$} ", cell)
+                format!(" {} ", pad_to(cell, width))
             }
         }).collect::<Vec<_>>().join("\x1b[2m│\x1b[0m");
 
@@ -435,7 +436,7 @@ fn render_table<'a>(node: &'a AstNode<'a>, output: &mut String, config: &Config)
 
 fn render_stacked_table(rows: &[Vec<String>], output: &mut String, width: usize) {
     let headers = &rows[0];
-    let label_width = headers.iter().map(|h| h.chars().count()).max().unwrap_or(0);
+    let label_width = headers.iter().map(|h| display_width(h)).max().unwrap_or(0);
 
     // No body rows to stack: show the headers so the table isn't silently dropped.
     if rows.len() == 1 {
@@ -460,7 +461,7 @@ fn render_stacked_table(rows: &[Vec<String>], output: &mut String, width: usize)
 
         for (j, header) in headers.iter().enumerate() {
             let value = row.get(j).map(|s| s.as_str()).unwrap_or("");
-            output.push_str(&format!("\x1b[1m{:<label_width$}\x1b[0m : {}\n", header, value));
+            output.push_str(&format!("\x1b[1m{}\x1b[0m : {}\n", pad_to(header, label_width), value));
         }
         output.push('\n');
     }
@@ -480,6 +481,16 @@ fn collect_text<'a>(node: &'a AstNode<'a>, output: &mut String) {
             }
         }
     }
+}
+
+/// Terminal display width of plain text (wide CJK characters take two columns).
+fn display_width(s: &str) -> usize {
+    UnicodeWidthStr::width(s)
+}
+
+/// Pad `s` with spaces on the right up to `width` display columns.
+fn pad_to(s: &str, width: usize) -> String {
+    format!("{s}{}", " ".repeat(width.saturating_sub(display_width(s))))
 }
 
 /// Word-wrap text at the given width, accounting for current indent.
@@ -562,7 +573,7 @@ pub(crate) fn visible_len(s: &str) -> usize {
     let mut chars = s.chars().peekable();
     while let Some(ch) = chars.next() {
         if ch != '\x1b' {
-            len += 1;
+            len += UnicodeWidthChar::width(ch).unwrap_or(0);
             continue;
         }
         match chars.peek() {
@@ -679,6 +690,33 @@ mod tests {
         let result = render_document(md, None, &test_config(80)).unwrap();
         assert!(result.contains("title: Short"));
         assert!(result.contains("date: 2024-01-01"));
+    }
+
+    #[test]
+    fn visible_len_counts_wide_characters_as_two_columns() {
+        assert_eq!(visible_len("日本語"), 6);
+        assert_eq!(visible_len("\x1b[1m日本\x1b[0m"), 4);
+    }
+
+    #[test]
+    fn table_columns_align_with_wide_characters() {
+        let md = "| 名前 | b |\n|---|---|\n| ab | c |\n";
+        let result = render_document(md, None, &test_config(80)).unwrap();
+        let widths: Vec<usize> = result
+            .lines()
+            .filter(|l| l.contains('│') || l.contains('┌') || l.contains('└'))
+            .map(visible_len)
+            .collect();
+        assert!(widths.len() >= 3);
+        assert!(widths.iter().all(|w| *w == widths[0]), "{widths:?}");
+    }
+
+    #[test]
+    fn word_wrap_respects_wide_character_width() {
+        let text = "日本語日本語日本語日本語日本語 日本語日本語日本語日本語日本語";
+        let wrapped = word_wrap(text, 40, 0);
+        assert!(wrapped.lines().all(|l| visible_len(l) <= 40), "{wrapped:?}");
+        assert_eq!(wrapped.lines().count(), 2);
     }
 
     #[test]
