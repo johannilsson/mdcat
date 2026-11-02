@@ -1,0 +1,63 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<link rel="stylesheet" href="node_modules/@xterm/xterm/css/xterm.css">
+<!--
+  A macOS-style terminal window around xterm.js. Everything is drawn at 2x
+  (28px font, doubled padding) because the canvas renderer doesn't honour
+  deviceScaleFactor, so the page is captured at 1x instead.
+-->
+<style>
+  html, body { margin: 0; background: transparent; }
+  #wrap { padding: 96px; display: inline-block; }
+  .win { background: #1b1d23; border-radius: 24px; overflow: hidden;
+         box-shadow: 0 48px 120px rgba(0,0,0,.45), 0 0 0 2px rgba(255,255,255,.08); }
+  .bar { height: 76px; display: flex; align-items: center; position: relative; background: #2a2d35; }
+  .dots { display: flex; gap: 16px; padding-left: 32px; }
+  .dots i { width: 24px; height: 24px; border-radius: 50%; display: block; }
+  .title { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center;
+           color: #9aa0ab; font: 500 26px "Inter", sans-serif; }
+  #term { padding: 28px 36px 36px; }
+  .xterm-viewport { overflow: hidden !important; }
+</style>
+</head>
+<body>
+<div id="wrap">
+  <div class="win">
+    <div class="bar">
+      <div class="dots"><i style="background:#ff5f57"></i><i style="background:#febc2e"></i><i style="background:#28c840"></i></div>
+      <div class="title" id="title"></div>
+    </div>
+    <div id="term"></div>
+  </div>
+</div>
+<script src="node_modules/@xterm/xterm/lib/xterm.js"></script>
+<script src="node_modules/@xterm/addon-canvas/lib/addon-canvas.js"></script>
+<script src="node_modules/@xterm/addon-image/lib/addon-image.js"></script>
+<script>
+// Writes `data` into a `cols`-wide terminal, then shrinks it to fit the content.
+window.render = (data, cols, title) => new Promise(resolve => {
+  document.getElementById('title').textContent = title;
+  const term = new Terminal({
+    cols, rows: 300, convertEol: true, allowProposedApi: true,
+    fontFamily: '"JetBrains Mono", monospace', fontSize: 28, lineHeight: 1.0,
+    theme: {
+      background: '#1b1d23', foreground: '#d4d8df', cursor: '#1b1d23',
+      blue: '#61afef', brightBlue: '#74b9ff', cyan: '#56b6c2', brightCyan: '#7fdbe6',
+      green: '#98c379', yellow: '#e5c07b', magenta: '#c678dd', red: '#e06c75',
+    },
+  });
+  term.open(document.getElementById('term'));
+  // The image addon only draws with the canvas (or WebGL) renderer.
+  term.loadAddon(new CanvasAddon.CanvasAddon());
+  term.loadAddon(new ImageAddon.ImageAddon());
+  term.write(data, () => {
+    const buf = term.buffer.active;
+    term.resize(cols, buf.cursorY + buf.baseY + 1);
+    setTimeout(resolve, 400);
+  });
+});
+</script>
+</body>
+</html>
