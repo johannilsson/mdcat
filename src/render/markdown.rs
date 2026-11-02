@@ -497,7 +497,7 @@ fn word_wrap(text: &str, width: usize, indent: usize) -> String {
             result.push_str(&" ".repeat(indent));
             line_len = 0;
         }
-        for word in segment.split_whitespace() {
+        for word in split_words(segment) {
             // Approximate visible length (ignores ANSI codes)
             let word_len = visible_len(word);
             if line_len == 0 {
@@ -517,6 +517,40 @@ fn word_wrap(text: &str, width: usize, indent: usize) -> String {
     }
 
     result
+}
+
+const CODE_START: &str = "\x1b[48;5;236m";
+const CODE_END: &str = "\x1b[49m\x1b[39m";
+
+/// Split on whitespace, but keep an inline code span intact so runs of spaces
+/// inside it are not collapsed to a single space.
+fn split_words(segment: &str) -> Vec<&str> {
+    let mut words = Vec::new();
+    let mut rest = segment;
+    let mut start: Option<usize> = None; // byte offset of the current word in `segment`
+    let base = segment.as_ptr() as usize;
+    while !rest.is_empty() {
+        let pos = rest.as_ptr() as usize - base;
+        if rest.starts_with(CODE_START) {
+            start.get_or_insert(pos);
+            let end = rest.find(CODE_END).map_or(rest.len(), |i| i + CODE_END.len());
+            rest = &rest[end..];
+            continue;
+        }
+        let ch = rest.chars().next().unwrap();
+        if ch.is_whitespace() {
+            if let Some(s) = start.take() {
+                words.push(&segment[s..pos]);
+            }
+        } else {
+            start.get_or_insert(pos);
+        }
+        rest = &rest[ch.len_utf8()..];
+    }
+    if let Some(s) = start {
+        words.push(&segment[s..]);
+    }
+    words
 }
 
 /// Estimate visible length of a string, ignoring ANSI escape sequences.
@@ -595,6 +629,21 @@ mod tests {
         let result = render_code_block("plain\n", "", &test_config(80), 0);
         let (top, bottom) = code_block_borders(&result);
         assert_eq!(top, bottom, "got: {result:?}");
+    }
+
+    #[test]
+    fn inline_code_keeps_repeated_spaces() {
+        let result = render_document("a `x  y` b", None, &test_config(80)).unwrap();
+        assert!(result.contains(" x  y "), "got: {result:?}");
+    }
+
+    #[test]
+    fn split_words_splits_plain_text_and_keeps_code_spans() {
+        assert_eq!(split_words("a  b\tc"), vec!["a", "b", "c"]);
+        assert_eq!(split_words(""), Vec::<&str>::new());
+        let code = format!("{CODE_START} p  q {CODE_END}");
+        let text = format!("go {code}, now");
+        assert_eq!(split_words(&text), vec!["go", &format!("{code},"), "now"]);
     }
 
     #[test]
