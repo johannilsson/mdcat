@@ -94,7 +94,8 @@ fn render_node<'a>(
             for child in node.children() {
                 render_node(child, &mut inner, base_dir, &inner_config, 0, false)?;
             }
-            for line in inner.lines() {
+            // Block children end with a blank separator line; don't draw it as a quote line.
+            for line in inner.trim_end_matches('\n').lines() {
                 // Inline resets (\x1b[0m) would end the quote's italics; re-apply after each.
                 let line = line
                     .replace("\x1b[0m", "\x1b[0m\x1b[3m")
@@ -878,5 +879,23 @@ mod tests {
     fn blockquote_italics_survive_nested_emphasis() {
         let result = render_document("> a *b* c", None, &test_config(80)).unwrap();
         assert!(result.contains("\x1b[23m\x1b[3m c"), "{result:?}");
+    }
+
+    #[test]
+    fn block_quote_has_no_trailing_empty_quote_line() {
+        let result = render_document("> one\n\nafter\n", None, &test_config(40)).unwrap();
+        let quote_lines = result.lines().filter(|l| l.contains('│')).count();
+        assert_eq!(quote_lines, 1, "got: {result:?}");
+    }
+
+    #[test]
+    fn nested_block_quote_has_no_empty_quote_lines() {
+        let result = render_document("> a\n> > b\n", None, &test_config(40)).unwrap();
+        for line in result.lines().filter(|l| l.contains('│')) {
+            assert!(
+                line.chars().any(|c| c.is_alphabetic()),
+                "empty quote line in: {result:?}"
+            );
+        }
     }
 }
