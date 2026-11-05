@@ -1,6 +1,6 @@
 use anyhow::Result;
 use comrak::{Arena, Options, parse_document};
-use comrak::nodes::{AstNode, NodeValue, NodeHeading, ListType};
+use comrak::nodes::{AstNode, NodeValue, NodeHeading, ListType, TableAlignment};
 use std::path::Path;
 use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 use crate::render::Config;
@@ -169,9 +169,10 @@ fn render_node<'a>(
             output.push_str(&format!("\x1b[2m{line}\x1b[0m\n\n"));
         }
 
-        NodeValue::Table(_) => {
+        NodeValue::Table(table) => {
+            let alignments = table.alignments.clone();
             drop(data);
-            render_table(node, output, config)?;
+            render_table(node, output, config, &alignments)?;
         }
 
         NodeValue::FootnoteDefinition(def) => {
@@ -373,7 +374,12 @@ fn render_code_block(code: &str, lang: &str, config: &Config, indent: usize) -> 
     out
 }
 
-fn render_table<'a>(node: &'a AstNode<'a>, output: &mut String, config: &Config) -> Result<()> {
+fn render_table<'a>(
+    node: &'a AstNode<'a>,
+    output: &mut String,
+    config: &Config,
+    alignments: &[TableAlignment],
+) -> Result<()> {
     // Collect rows
     let mut rows: Vec<Vec<String>> = Vec::new();
 
@@ -417,10 +423,11 @@ fn render_table<'a>(node: &'a AstNode<'a>, output: &mut String, config: &Config)
     for (i, row) in rows.iter().enumerate() {
         let cells: String = row.iter().enumerate().map(|(j, cell)| {
             let width = col_widths.get(j).copied().unwrap_or(0);
+            let align = alignments.get(j).copied().unwrap_or(TableAlignment::None);
             if i == 0 {
-                format!(" \x1b[1m{}\x1b[0m ", pad_to(cell, width))
+                format!(" \x1b[1m{}\x1b[0m ", pad_aligned(cell, width, align))
             } else {
-                format!(" {} ", pad_to(cell, width))
+                format!(" {} ", pad_aligned(cell, width, align))
             }
         }).collect::<Vec<_>>().join("\x1b[2m│\x1b[0m");
 
@@ -492,6 +499,19 @@ fn display_width(s: &str) -> usize {
 /// Pad `s` with spaces on the right up to `width` display columns.
 fn pad_to(s: &str, width: usize) -> String {
     format!("{s}{}", " ".repeat(width.saturating_sub(display_width(s))))
+}
+
+/// Pad `s` to `width` display columns according to a table column alignment.
+fn pad_aligned(s: &str, width: usize, align: TableAlignment) -> String {
+    let gap = width.saturating_sub(display_width(s));
+    match align {
+        TableAlignment::Right => format!("{}{s}", " ".repeat(gap)),
+        TableAlignment::Center => {
+            let left = gap / 2;
+            format!("{}{s}{}", " ".repeat(left), " ".repeat(gap - left))
+        }
+        _ => pad_to(s, width),
+    }
 }
 
 /// Word-wrap text at the given width, accounting for current indent.
@@ -710,6 +730,22 @@ mod tests {
             .collect();
         assert!(widths.len() >= 3);
         assert!(widths.iter().all(|w| *w == widths[0]), "{widths:?}");
+    }
+
+    #[test]
+    fn table_honours_column_alignment() {
+        let md = "| left | center | right |\n|:--|:-:|--:|\n| a | b | c |\n";
+        let result = render_document(md, None, &test_config(80)).unwrap();
+        let row = result.lines().map(|l| l.replace("\x1b[2m", "").replace("\x1b[0m", "")).find(|l| l.contains(" a ")).unwrap();
+        assert_eq!(row, "│ a    │   b    │     c │");
+    }
+
+    #[test]
+    fn pad_aligned_variants() {
+        assert_eq!(pad_aligned("ab", 5, TableAlignment::None), "ab   ");
+        assert_eq!(pad_aligned("ab", 5, TableAlignment::Left), "ab   ");
+        assert_eq!(pad_aligned("ab", 5, TableAlignment::Right), "   ab");
+        assert_eq!(pad_aligned("ab", 5, TableAlignment::Center), " ab  ");
     }
 
     #[test]
