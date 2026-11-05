@@ -137,36 +137,86 @@ pub enum ImageProtocol {
 }
 
 /// Auto-detect the best image protocol supported by the current terminal.
+///
+/// `override_` is the value of `--image-protocol`; `None` and `"auto"` both
+/// mean "detect from the environment".
 pub fn detect_image_protocol(override_: Option<&str>) -> ImageProtocol {
+    detect_image_protocol_with(override_, |k| std::env::var(k).ok())
+}
+
+fn detect_image_protocol_with(
+    override_: Option<&str>,
+    env: impl Fn(&str) -> Option<String>,
+) -> ImageProtocol {
     if let Some(proto) = override_ {
-        return match proto {
-            "kitty" => ImageProtocol::Kitty,
-            "iterm2" => ImageProtocol::ITerm2,
-            "sixel" => ImageProtocol::Sixel,
-            _ => ImageProtocol::Blocks,
-        };
+        match proto {
+            "auto" => {}
+            "kitty" => return ImageProtocol::Kitty,
+            "iterm2" => return ImageProtocol::ITerm2,
+            "sixel" => return ImageProtocol::Sixel,
+            _ => return ImageProtocol::Blocks,
+        }
     }
+
+    let term = env("TERM").unwrap_or_default();
+    let term_program = env("TERM_PROGRAM").unwrap_or_default();
 
     // Kitty: $TERM=xterm-kitty
     // Ghostty: $TERM=xterm-ghostty or $TERM_PROGRAM=ghostty (supports Kitty protocol)
-    if std::env::var("TERM").map(|t| t == "xterm-kitty" || t == "xterm-ghostty").unwrap_or(false)
-        || std::env::var("TERM_PROGRAM").map(|t| t == "ghostty").unwrap_or(false)
-    {
+    if term == "xterm-kitty" || term == "xterm-ghostty" || term_program == "ghostty" {
         return ImageProtocol::Kitty;
     }
 
     // iTerm2: $TERM_PROGRAM=iTerm.app or $ITERM_SESSION_ID set
-    if std::env::var("TERM_PROGRAM").map(|t| t == "iTerm.app").unwrap_or(false)
-        || std::env::var("ITERM_SESSION_ID").is_ok()
-    {
-        return ImageProtocol::ITerm2;
-    }
-
-    // WezTerm supports iTerm2 protocol
-    if std::env::var("TERM_PROGRAM").map(|t| t == "WezTerm").unwrap_or(false) {
+    // WezTerm supports the iTerm2 protocol
+    if term_program == "iTerm.app" || term_program == "WezTerm" || env("ITERM_SESSION_ID").is_some() {
         return ImageProtocol::ITerm2;
     }
 
     // Fall back to Unicode blocks (works everywhere)
     ImageProtocol::Blocks
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn env_of<'a>(pairs: &'a [(&'a str, &'a str)]) -> impl Fn(&str) -> Option<String> + 'a {
+        move |k| pairs.iter().find(|(n, _)| *n == k).map(|(_, v)| v.to_string())
+    }
+
+    #[test]
+    fn auto_override_detects_from_environment() {
+        let env = [("TERM", "xterm-kitty")];
+        assert_eq!(detect_image_protocol_with(Some("auto"), env_of(&env)), ImageProtocol::Kitty);
+    }
+
+    #[test]
+    fn auto_override_falls_back_to_blocks() {
+        assert_eq!(detect_image_protocol_with(Some("auto"), env_of(&[])), ImageProtocol::Blocks);
+    }
+
+    #[test]
+    fn explicit_override_wins_over_environment() {
+        let env = [("TERM", "xterm-kitty")];
+        assert_eq!(detect_image_protocol_with(Some("iterm2"), env_of(&env)), ImageProtocol::ITerm2);
+        assert_eq!(detect_image_protocol_with(Some("sixel"), env_of(&env)), ImageProtocol::Sixel);
+        assert_eq!(detect_image_protocol_with(Some("blocks"), env_of(&env)), ImageProtocol::Blocks);
+    }
+
+    #[test]
+    fn detects_terminals_from_environment() {
+        let cases: [(&[(&str, &str)], ImageProtocol); 7] = [
+            (&[("TERM", "xterm-ghostty")], ImageProtocol::Kitty),
+            (&[("TERM_PROGRAM", "ghostty")], ImageProtocol::Kitty),
+            (&[("TERM_PROGRAM", "iTerm.app")], ImageProtocol::ITerm2),
+            (&[("ITERM_SESSION_ID", "w0t0p0")], ImageProtocol::ITerm2),
+            (&[("TERM_PROGRAM", "WezTerm")], ImageProtocol::ITerm2),
+            (&[("TERM", "xterm-256color")], ImageProtocol::Blocks),
+            (&[], ImageProtocol::Blocks),
+        ];
+        for (env, expected) in cases {
+            assert_eq!(detect_image_protocol_with(None, env_of(env)), expected, "env: {env:?}");
+        }
+    }
 }
