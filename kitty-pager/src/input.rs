@@ -107,6 +107,12 @@ fn submitted_query(buffer: &str, previous: &Option<SearchState>) -> Option<Strin
 
 /// Step `current` one match in `direction`, wrapping around.  `len` must be
 /// non-zero.
+/// Pops the last character; returns true when the buffer was already empty,
+/// in which case `less` abandons the search prompt.
+fn backspace_cancels(buffer: &mut String) -> bool {
+    buffer.pop().is_none()
+}
+
 fn step_match(current: usize, len: usize, direction: SearchDirection) -> usize {
     match direction {
         SearchDirection::Forward => (current + 1) % len,
@@ -199,6 +205,9 @@ fn event_loop(
                             KeyCode::Esc => {
                                 mode = InputMode::Normal;
                             }
+                            KeyCode::Char('c') if modifiers == KeyModifiers::CONTROL => {
+                                mode = InputMode::Normal;
+                            }
                             KeyCode::Enter => {
                                 if let Some(query) = submitted_query(buffer, &search) {
                                     let matches = find_matches(entries, &query);
@@ -215,7 +224,9 @@ fn event_loop(
                                 mode = InputMode::Normal;
                             }
                             KeyCode::Backspace => {
-                                buffer.pop();
+                                if backspace_cancels(buffer) {
+                                    mode = InputMode::Normal;
+                                }
                             }
                             KeyCode::Char(c)
                                 if modifiers == KeyModifiers::NONE
@@ -234,6 +245,9 @@ fn event_loop(
                         let full_page = (screen_rows as usize).saturating_sub(2).max(1);
 
                         match (code, modifiers) {
+                            (KeyCode::Esc, _) if search.is_some() => {
+                                search = None;
+                            }
                             (KeyCode::Char('q'), _)
                             | (KeyCode::Char('Q'), _)
                             | (KeyCode::Esc, _)
@@ -498,6 +512,15 @@ mod tests {
         });
         assert_eq!(submitted_query("", &prev), Some("bar".to_string()));
         assert_eq!(submitted_query("", &None), None);
+    }
+
+    #[test]
+    fn backspace_removes_char_then_cancels_on_empty() {
+        let mut b = String::from("ab");
+        assert!(!backspace_cancels(&mut b));
+        assert!(!backspace_cancels(&mut b));
+        assert_eq!(b, "");
+        assert!(backspace_cancels(&mut b));
     }
 
     #[test]
