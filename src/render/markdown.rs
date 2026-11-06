@@ -165,8 +165,10 @@ fn render_node<'a>(
 
         NodeValue::ThematicBreak => {
             drop(data);
-            let line = "─".repeat(config.width as usize);
-            output.push_str(&format!("\x1b[2m{line}\x1b[0m\n\n"));
+            // Stay inside the enclosing list item's indent so the rule fits the terminal.
+            let line = "─".repeat((config.width as usize).saturating_sub(indent));
+            let prefix = " ".repeat(indent);
+            output.push_str(&format!("{prefix}\x1b[2m{line}\x1b[0m\n\n"));
         }
 
         NodeValue::Table(table) => {
@@ -933,5 +935,22 @@ mod tests {
                 "empty quote line in: {result:?}"
             );
         }
+    }
+
+    #[test]
+    fn thematic_break_in_list_item_fits_within_width() {
+        let md = "- item\n\n  ---\n\n  more\n";
+        let result = render_document(md, None, &test_config(40)).unwrap();
+        for line in result.lines() {
+            assert!(visible_len(line) <= 40, "line too wide: {line:?}");
+        }
+        let rule = result.lines().find(|l| l.contains('─')).expect("rule");
+        assert!(rule.starts_with("  \x1b[2m"), "rule not indented: {rule:?}");
+    }
+
+    #[test]
+    fn top_level_thematic_break_spans_full_width() {
+        let result = render_document("---\n", None, &test_config(40)).unwrap();
+        assert_eq!(result.matches('─').count(), 40, "{result:?}");
     }
 }
