@@ -356,7 +356,8 @@ fn render_list_item<'a>(
 }
 
 fn render_code_block(code: &str, lang: &str, config: &Config, indent: usize) -> String {
-    let highlighted = highlight_code(code, lang, &config.theme);
+    // The trailing newline would otherwise render as an extra empty row.
+    let highlighted = highlight_code(code.trim_end_matches('\n'), lang, &config.theme);
     let width = (config.width as usize).saturating_sub(indent);
     let inner = width.min(60);
     let line = "─".repeat(inner);
@@ -661,6 +662,13 @@ mod tests {
         let result = render_code_block("plain\n", "", &test_config(80), 0);
         let (top, bottom) = code_block_borders(&result);
         assert_eq!(top, bottom, "got: {result:?}");
+    }
+
+    #[test]
+    fn code_block_has_no_trailing_empty_row() {
+        let result = render_code_block("one\ntwo\n", "", &test_config(80), 0);
+        let rows = result.lines().filter(|l| l.contains('│')).count();
+        assert_eq!(rows, 2, "got: {result:?}");
     }
 
     #[test]
