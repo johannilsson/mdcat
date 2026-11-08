@@ -172,7 +172,19 @@ fn render_node<'a>(
         NodeValue::Table(table) => {
             let alignments = table.alignments.clone();
             drop(data);
-            render_table(node, output, config, &alignments)?;
+            // Render at the width left over after the indent, then indent each line.
+            let inner = Config { width: config.width.saturating_sub(indent as u16).max(1), ..config.clone() };
+            let mut table_out = String::new();
+            render_table(node, &mut table_out, &inner, &alignments)?;
+            let pad = " ".repeat(indent);
+            for line in table_out.split_inclusive('\n') {
+                if line == "\n" {
+                    output.push_str(line);
+                } else {
+                    output.push_str(&pad);
+                    output.push_str(line);
+                }
+            }
         }
 
         NodeValue::FootnoteDefinition(def) => {
@@ -932,6 +944,27 @@ mod tests {
                 line.chars().any(|c| c.is_alphabetic()),
                 "empty quote line in: {result:?}"
             );
+        }
+    }
+
+    #[test]
+    fn table_in_list_item_is_indented() {
+        let md = "- a\n\n  | x | y |\n  |---|---|\n  | 1 | 2 |\n";
+        let out = render_document(md, None, &test_config(80)).unwrap();
+        let table_lines: Vec<&str> = out.lines().filter(|l| l.contains('│') || l.contains('┌')).collect();
+        assert!(!table_lines.is_empty());
+        for line in table_lines {
+            assert!(line.starts_with("  "), "table line not indented: {line:?}");
+        }
+    }
+
+    #[test]
+    fn table_in_list_item_fits_reduced_width() {
+        // 11 columns wide table fits at width 11 but not once indented by 2.
+        let md = "- a\n\n  | abcde | fgh |\n  |---|---|\n  | 1 | 2 |\n";
+        let out = render_document(md, None, &test_config(14)).unwrap();
+        for line in out.lines() {
+            assert!(visible_len(line) <= 14, "line too wide: {line:?}");
         }
     }
 }
