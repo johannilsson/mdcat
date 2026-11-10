@@ -174,7 +174,19 @@ fn render_node<'a>(
         NodeValue::Table(table) => {
             let alignments = table.alignments.clone();
             drop(data);
-            render_table(node, output, config, &alignments)?;
+            // Render at the width left over after the indent, then indent each line.
+            let inner = Config { width: config.width.saturating_sub(indent as u16).max(1), ..config.clone() };
+            let mut table_out = String::new();
+            render_table(node, &mut table_out, &inner, &alignments)?;
+            let pad = " ".repeat(indent);
+            for line in table_out.split_inclusive('\n') {
+                if line == "\n" {
+                    output.push_str(line);
+                } else {
+                    output.push_str(&pad);
+                    output.push_str(line);
+                }
+            }
         }
 
         NodeValue::FootnoteDefinition(def) => {
@@ -358,7 +370,8 @@ fn render_list_item<'a>(
 }
 
 fn render_code_block(code: &str, lang: &str, config: &Config, indent: usize) -> String {
-    let highlighted = highlight_code(code, lang, &config.theme);
+    // The trailing newline would otherwise render as an extra empty row.
+    let highlighted = highlight_code(code.trim_end_matches('\n'), lang, &config.theme);
     let width = (config.width as usize).saturating_sub(indent);
     let inner = width.min(60);
     let line = "─".repeat(inner);
@@ -666,6 +679,13 @@ mod tests {
     }
 
     #[test]
+    fn code_block_has_no_trailing_empty_row() {
+        let result = render_code_block("one\ntwo\n", "", &test_config(80), 0);
+        let rows = result.lines().filter(|l| l.contains('│')).count();
+        assert_eq!(rows, 2, "got: {result:?}");
+    }
+
+    #[test]
     fn inline_code_keeps_repeated_spaces() {
         let result = render_document("a `x  y` b", None, &test_config(80)).unwrap();
         assert!(result.contains(" x  y "), "got: {result:?}");
@@ -952,5 +972,26 @@ mod tests {
     fn top_level_thematic_break_spans_full_width() {
         let result = render_document("---\n", None, &test_config(40)).unwrap();
         assert_eq!(result.matches('─').count(), 40, "{result:?}");
+    }
+
+    #[test]
+    fn table_in_list_item_is_indented() {
+        let md = "- a\n\n  | x | y |\n  |---|---|\n  | 1 | 2 |\n";
+        let out = render_document(md, None, &test_config(80)).unwrap();
+        let table_lines: Vec<&str> = out.lines().filter(|l| l.contains('│') || l.contains('┌')).collect();
+        assert!(!table_lines.is_empty());
+        for line in table_lines {
+            assert!(line.starts_with("  "), "table line not indented: {line:?}");
+        }
+    }
+
+    #[test]
+    fn table_in_list_item_fits_reduced_width() {
+        // 11 columns wide table fits at width 11 but not once indented by 2.
+        let md = "- a\n\n  | abcde | fgh |\n  |---|---|\n  | 1 | 2 |\n";
+        let out = render_document(md, None, &test_config(14)).unwrap();
+        for line in out.lines() {
+            assert!(visible_len(line) <= 14, "line too wide: {line:?}");
+        }
     }
 }
