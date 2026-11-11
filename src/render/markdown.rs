@@ -88,9 +88,10 @@ fn render_node<'a>(
         NodeValue::BlockQuote => {
             drop(data);
             let mut inner = String::new();
-            // The "│ " prefix takes two columns; wrap the contents narrower to compensate.
+            // The indent and the "│ " prefix take columns; wrap the contents narrower to compensate.
             let mut inner_config = config.clone();
-            inner_config.width = config.width.saturating_sub(2);
+            inner_config.width = config.width.saturating_sub(indent as u16 + 2);
+            let pad = " ".repeat(indent);
             for child in node.children() {
                 render_node(child, &mut inner, base_dir, &inner_config, 0, false)?;
             }
@@ -100,7 +101,7 @@ fn render_node<'a>(
                 let line = line
                     .replace("\x1b[0m", "\x1b[0m\x1b[3m")
                     .replace("\x1b[23m", "\x1b[23m\x1b[3m");
-                output.push_str(&format!("\x1b[2m│\x1b[0m \x1b[3m{line}\x1b[0m\n"));
+                output.push_str(&format!("{pad}\x1b[2m│\x1b[0m \x1b[3m{line}\x1b[0m\n"));
             }
             output.push('\n');
         }
@@ -973,6 +974,24 @@ mod tests {
         let out = render_document(md, None, &test_config(14)).unwrap();
         for line in out.lines() {
             assert!(visible_len(line) <= 14, "line too wide: {line:?}");
+        }
+    }
+
+    #[test]
+    fn block_quote_in_list_item_is_indented() {
+        let md = "- item\n\n  > quoted\n";
+        let out = render_document(md, None, &test_config(80)).unwrap();
+        let quote_lines: Vec<&str> = out.lines().filter(|l| l.contains('│')).collect();
+        assert_eq!(quote_lines.len(), 1, "{out:?}");
+        assert!(quote_lines[0].starts_with("  \x1b[2m│"), "quote line not indented: {out:?}");
+    }
+
+    #[test]
+    fn block_quote_in_list_item_fits_reduced_width() {
+        let md = "- item\n\n  > aaaa bbbb cccc dddd eeee ffff gggg hhhh iiii jjjj\n";
+        let out = render_document(md, None, &test_config(30)).unwrap();
+        for line in out.lines() {
+            assert!(visible_len(line) <= 30, "line too wide: {line:?}");
         }
     }
 }
