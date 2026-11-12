@@ -21,6 +21,77 @@ pub(crate) enum EntryKind {
     },
 }
 
+/// Strip ANSI escape sequences (CSI and APC/OSC/PM) from `s`, returning plain text.
+pub(crate) fn strip_ansi(s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    let mut chars = s.chars().peekable();
+    while let Some(c) = chars.next() {
+        if c == '\x1b' {
+            match chars.next() {
+                Some('[') => {
+                    // CSI sequence: skip until a final byte (ASCII 0x40–0x7E).
+                    for c2 in chars.by_ref() {
+                        if ('\x40'..='\x7e').contains(&c2) {
+                            break;
+                        }
+                    }
+                }
+                Some(intro @ ('_' | ']' | '^' | 'P')) => {
+                    // APC / OSC / PM / DCS: skip until String Terminator (\x1b\\) or BEL.
+                    let _ = intro;
+                    loop {
+                        match chars.next() {
+                            Some('\x1b') => {
+                                chars.next(); // consume '\\'
+                                break;
+                            }
+                            Some('\x07') | None => break,
+                            _ => {}
+                        }
+                    }
+                }
+                _ => {}
+            }
+        } else {
+            out.push(c);
+        }
+    }
+    out
+}
+
+/// Wrap `line` in reverse video, re-enabling it after every SGR sequence in
+/// the line so that embedded resets (e.g. `\x1b[0m` after inline code) do not
+/// cut the highlight short.
+pub(crate) fn highlight_line(line: &str) -> String {
+    let mut out = String::with_capacity(line.len() + 16);
+    out.push_str("\x1b[7m");
+    let mut chars = line.chars();
+    while let Some(c) = chars.next() {
+        out.push(c);
+        if c != '\x1b' {
+            continue;
+        }
+        match chars.next() {
+            Some('[') => {
+                out.push('[');
+                for c2 in chars.by_ref() {
+                    out.push(c2);
+                    if ('\x40'..='\x7e').contains(&c2) {
+                        if c2 == 'm' {
+                            out.push_str("\x1b[7m");
+                        }
+                        break;
+                    }
+                }
+            }
+            Some(c2) => out.push(c2),
+            None => {}
+        }
+    }
+    out.push_str("\x1b[0m");
+    out
+}
+
 /// Build a flat list of terminal rows from a document.
 ///
 /// Text items are split on `\n`; each line becomes one `LayoutEntry`.
@@ -78,6 +149,13 @@ pub(crate) fn layout(doc: &KittyDocument, cell_px_width: u32, cell_px_height: u3
 /// Images are placed with source-rectangle cropping (`y=`, `r=`) so that
 /// partially-visible images render correctly when scrolled.  Pixel data is
 /// transmitted once (`a=T`) and re-placed cheaply (`a=p`) on subsequent frames.
+///
+/// `search_query`: when non-empty, text lines whose plain content contains the
+/// query (case-insensitive) are rendered with reverse-video highlighting.
+///
+/// `status_text`: appended to the status bar.  Pass the search prompt during
+/// input mode, the active query indicator in normal mode, or an empty string.
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn render_frame(
     doc: &KittyDocument,
     layout: &[LayoutEntry],
@@ -86,6 +164,8 @@ pub(crate) fn render_frame(
     cell_px_width: u32,
     cell_px_height: u32,
     transmitted: &mut HashSet<u32>,
+    search_query: &str,
+    status_text: &str,
 ) -> String {
     let mut out = String::new();
 
@@ -99,6 +179,7 @@ pub(crate) fn render_frame(
     // Track which images have already been placed in this frame so we skip
     // their continuation rows.
     let mut placed_images: HashSet<usize> = HashSet::new();
+    let query_lower = search_query.to_lowercase();
 
     for entry in layout.iter().skip(top_entry) {
         if rows_rendered >= max_content_rows {
@@ -107,7 +188,13 @@ pub(crate) fn render_frame(
 
         match &entry.kind {
             EntryKind::Text(line) => {
-                out.push_str(line);
+                let highlighted = !query_lower.is_empty()
+                    && strip_ansi(line).to_lowercase().contains(&query_lower);
+                if highlighted {
+                    out.push_str(&highlight_line(line));
+                } else {
+                    out.push_str(line);
+                }
                 out.push_str("\x1b[K\r\n");
                 rows_rendered += 1;
             }
@@ -191,10 +278,17 @@ pub(crate) fn render_frame(
     // Status bar.
     let total = layout.len();
     let pct = ((top_entry + 1) * 100).checked_div(total).unwrap_or(100).min(100);
-    out.push_str(&format!(
-        "\x1b[{row};1H\x1b[2K\x1b[7m {pct}%\x1b[0m",
-        row = screen_rows
-    ));
+    if status_text.is_empty() {
+        out.push_str(&format!(
+            "\x1b[{row};1H\x1b[2K\x1b[7m {pct}%\x1b[0m",
+            row = screen_rows
+        ));
+    } else {
+        out.push_str(&format!(
+            "\x1b[{row};1H\x1b[2K\x1b[7m {pct}%  {status_text}\x1b[0m",
+            row = screen_rows
+        ));
+    }
 
     out
 }
@@ -338,7 +432,7 @@ mod tests {
         let doc = make_doc(vec![DocItem::Text("hello".to_string())]);
         let entries = layout(&doc, 8, 16);
         let mut transmitted = HashSet::new();
-        let frame = render_frame(&doc, &entries, 0, 24, 8, 16, &mut transmitted);
+        let frame = render_frame(&doc, &entries, 0, 24, 8, 16, &mut transmitted, "", "");
         assert!(frame.contains("\x1b[7m "));
     }
 
@@ -347,7 +441,7 @@ mod tests {
         let doc = make_doc(vec![DocItem::Text("hello".to_string())]);
         let entries = layout(&doc, 8, 16);
         let mut transmitted = HashSet::new();
-        let frame = render_frame(&doc, &entries, 0, 24, 8, 16, &mut transmitted);
+        let frame = render_frame(&doc, &entries, 0, 24, 8, 16, &mut transmitted, "", "");
         assert!(!frame.contains("\x1b[2J"));
         assert!(frame.contains("a=d,d=a"));
         assert!(frame.contains("\x1b[H"));
@@ -366,7 +460,7 @@ mod tests {
         let entries = layout(&doc, 8, 16);
         let mut transmitted = HashSet::new();
 
-        let frame = render_frame(&doc, &entries, 0, 24, 8, 16, &mut transmitted);
+        let frame = render_frame(&doc, &entries, 0, 24, 8, 16, &mut transmitted, "", "");
         // First frame: transmit (a=t) then place (a=p).
         assert!(frame.contains("a=t"));
         assert!(frame.contains("a=p,i=42"));
@@ -376,7 +470,7 @@ mod tests {
         let place_pos = frame.find("a=p").unwrap();
         assert!(transmit_pos < place_pos);
 
-        let frame2 = render_frame(&doc, &entries, 0, 24, 8, 16, &mut transmitted);
+        let frame2 = render_frame(&doc, &entries, 0, 24, 8, 16, &mut transmitted, "", "");
         // Second frame: placement only (no retransmission).
         assert!(frame2.contains("a=p,i=42"));
         assert!(!frame2.contains("a=t"));
@@ -400,7 +494,7 @@ mod tests {
 
         let mut transmitted = HashSet::new();
         // Skip the first image row (top_entry=1 → row_in_image=1).
-        let frame = render_frame(&doc, &entries, 1, 24, 8, 16, &mut transmitted);
+        let frame = render_frame(&doc, &entries, 1, 24, 8, 16, &mut transmitted, "", "");
         // Should transmit with y=16 (1 row * 16px), h=32 (2 visible rows × 16px),
         // and r=2 (2 visible display rows).
         assert!(frame.contains("y=16"));
@@ -431,7 +525,7 @@ mod tests {
         assert_eq!(entries.len(), 50);
 
         let mut transmitted = HashSet::new();
-        let frame = render_frame(&doc, &entries, 1, 51, 9, 18, &mut transmitted);
+        let frame = render_frame(&doc, &entries, 1, 51, 9, 18, &mut transmitted, "", "");
         assert!(frame.contains("y=30"), "expected y=30 in frame");
         assert!(frame.contains("h=1470"), "expected h=1470 in frame");
         assert!(frame.contains("r=49"), "expected r=49 in frame");
@@ -452,7 +546,7 @@ mod tests {
 
         let mut transmitted = HashSet::new();
         // Screen is 3 rows: 2 content + 1 status.  Image needs 3 rows → clipped to 2.
-        let frame = render_frame(&doc, &entries, 0, 3, 8, 16, &mut transmitted);
+        let frame = render_frame(&doc, &entries, 0, 3, 8, 16, &mut transmitted, "", "");
         assert!(frame.contains("h=32"));
         assert!(frame.contains("r=2"));
     }
@@ -480,7 +574,7 @@ mod tests {
         assert_eq!(entries.len(), 8);
 
         let mut transmitted = HashSet::new();
-        let frame = render_frame(&doc, &entries, 0, 10, 8, 16, &mut transmitted);
+        let frame = render_frame(&doc, &entries, 0, 10, 8, 16, &mut transmitted, "", "");
 
         // Image starts at content row 5 → terminal row 6 (1-based).
         // Rows 6, 7, 8 must each have a clear-line sequence (\x1b[K)
@@ -517,12 +611,77 @@ mod tests {
 
         let mut transmitted = HashSet::new();
         // Screen has 2 content rows → image is bottom-cropped to 2 rows.
-        let frame = render_frame(&doc, &entries, 0, 3, 8, 16, &mut transmitted);
+        let frame = render_frame(&doc, &entries, 0, 3, 8, 16, &mut transmitted, "", "");
         assert!(frame.contains("c=10"), "expected c=10 for natural-size image crop");
         assert!(frame.contains("r=2"), "expected r=2 for bottom crop");
 
         // Full image visible (no crop) — c= should still be present.
-        let frame2 = render_frame(&doc, &entries, 0, 24, 8, 16, &mut transmitted);
+        let frame2 = render_frame(&doc, &entries, 0, 24, 8, 16, &mut transmitted, "", "");
         assert!(frame2.contains("c=10"), "expected c=10 even without crop");
+    }
+
+    #[test]
+    fn render_frame_highlights_search_match() {
+        let doc = make_doc(vec![DocItem::Text("foo bar\nbaz qux".to_string())]);
+        let entries = layout(&doc, 8, 16);
+        let mut transmitted = HashSet::new();
+        let frame = render_frame(&doc, &entries, 0, 24, 8, 16, &mut transmitted, "bar", "");
+        // The matching line ("foo bar") should be wrapped in reverse-video.
+        assert!(frame.contains("\x1b[7mfoo bar\x1b[0m"), "expected highlighted match line");
+        // The non-matching line should not be highlighted.
+        assert!(!frame.contains("\x1b[7mbaz qux"));
+    }
+
+    #[test]
+    fn render_frame_no_highlight_when_no_query() {
+        let doc = make_doc(vec![DocItem::Text("hello world".to_string())]);
+        let entries = layout(&doc, 8, 16);
+        let mut transmitted = HashSet::new();
+        let frame = render_frame(&doc, &entries, 0, 24, 8, 16, &mut transmitted, "", "");
+        assert!(!frame.contains("\x1b[7mhello world"));
+    }
+
+    #[test]
+    fn render_frame_highlight_survives_embedded_reset() {
+        let doc = make_doc(vec![DocItem::Text(
+            "some \x1b[96m code \x1b[0m here and \x1b[1mbold\x1b[0m text".to_string(),
+        )]);
+        let entries = layout(&doc, 8, 16);
+        let mut transmitted = HashSet::new();
+        let frame = render_frame(&doc, &entries, 0, 24, 8, 16, &mut transmitted, "text", "");
+        // Reverse video is re-enabled after each reset, so the match at the
+        // end of the line is still highlighted.
+        assert!(frame.contains("\x1b[0m\x1b[7m text\x1b[0m"), "frame: {frame:?}");
+    }
+
+    #[test]
+    fn highlight_line_reenables_reverse_after_every_sgr() {
+        assert_eq!(highlight_line("plain"), "\x1b[7mplain\x1b[0m");
+        assert_eq!(
+            highlight_line("a\x1b[0mb\x1b[1;34mc"),
+            "\x1b[7ma\x1b[0m\x1b[7mb\x1b[1;34m\x1b[7mc\x1b[0m"
+        );
+    }
+
+    #[test]
+    fn highlight_line_leaves_non_sgr_sequences_alone() {
+        // Cursor movement (CSI ... H) and OSC 8 links are passed through untouched.
+        assert_eq!(highlight_line("\x1b[2Hx"), "\x1b[7m\x1b[2Hx\x1b[0m");
+        let link = "\x1b]8;;https://example.com\x1b\\link\x1b]8;;\x1b\\";
+        assert_eq!(highlight_line(link), format!("\x1b[7m{link}\x1b[0m"));
+    }
+
+    #[test]
+    fn strip_ansi_removes_csi_sequences() {
+        assert_eq!(strip_ansi("\x1b[1mhello\x1b[0m"), "hello");
+        assert_eq!(strip_ansi("\x1b[38;5;200mcolor\x1b[0m"), "color");
+        assert_eq!(strip_ansi("plain"), "plain");
+    }
+
+    #[test]
+    fn strip_ansi_removes_apc_sequences() {
+        // APC used by Kitty graphics protocol
+        let s = "text\x1b_Ga=t;\x1b\\more";
+        assert_eq!(strip_ansi(s), "textmore");
     }
 }
