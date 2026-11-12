@@ -125,9 +125,20 @@ fn render_node<'a>(
             }
         }
 
-        NodeValue::HtmlBlock(_) => {
-            // Skip raw HTML blocks
+        NodeValue::HtmlBlock(html) => {
+            // Raw HTML can't be rendered, but its text content shouldn't be
+            // lost. Show the text with tags removed; comments stay hidden.
+            let text = html_block_text(&html.literal);
             drop(data);
+            if !text.is_empty() {
+                let width = (config.width as usize).saturating_sub(indent);
+                let wrapped = word_wrap(&text, width, 0);
+                let pad = " ".repeat(indent);
+                for line in wrapped.lines() {
+                    output.push_str(&format!("{pad}{line}\n"));
+                }
+                output.push('\n');
+            }
         }
 
         NodeValue::List(list) => {
@@ -506,6 +517,32 @@ fn collect_text<'a>(node: &'a AstNode<'a>, output: &mut String) {
 }
 
 /// Terminal display width of plain text (wide CJK characters take two columns).
+/// Extract the visible text of a raw HTML block: comments and tags are
+/// removed and whitespace is collapsed.
+fn html_block_text(html: &str) -> String {
+    let mut text = String::new();
+    let mut rest = html;
+    while let Some(start) = rest.find('<') {
+        text.push_str(&rest[..start]);
+        rest = &rest[start..];
+        let end = if rest.starts_with("<!--") {
+            rest.find("-->").map(|i| i + 3)
+        } else {
+            rest.find('>').map(|i| i + 1)
+        };
+        match end {
+            Some(e) => {
+                rest = &rest[e..];
+                text.push(' ');
+            }
+            // Unterminated tag/comment: drop the remainder.
+            None => return text.split_whitespace().collect::<Vec<_>>().join(" "),
+        }
+    }
+    text.push_str(rest);
+    text.split_whitespace().collect::<Vec<_>>().join(" ")
+}
+
 fn display_width(s: &str) -> usize {
     UnicodeWidthStr::width(s)
 }
@@ -682,6 +719,27 @@ mod tests {
         let result = render_code_block("one\ntwo\n", "", &test_config(80), 0);
         let rows = result.lines().filter(|l| l.contains('│')).count();
         assert_eq!(rows, 2, "got: {result:?}");
+    }
+
+    #[test]
+    fn html_block_text_is_kept_without_tags() {
+        let result = render_document("<div>block <b>html</b></div>\n", None, &test_config(80)).unwrap();
+        assert!(result.contains("block html"), "got: {result:?}");
+        assert!(!result.contains('<'), "got: {result:?}");
+    }
+
+    #[test]
+    fn html_comment_blocks_stay_hidden() {
+        let result = render_document("<!-- secret -->\n\nafter\n", None, &test_config(80)).unwrap();
+        assert!(!result.contains("secret"), "got: {result:?}");
+        assert!(result.contains("after"), "got: {result:?}");
+    }
+
+    #[test]
+    fn html_block_text_helper() {
+        assert_eq!(html_block_text("<p align=\"c\">Hi\n  there</p>"), "Hi there");
+        assert_eq!(html_block_text("<!-- x -->"), "");
+        assert_eq!(html_block_text("a <br"), "a");
     }
 
     #[test]
