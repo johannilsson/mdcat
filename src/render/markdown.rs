@@ -7,7 +7,7 @@ use crate::render::Config;
 use crate::render::code::highlight_code;
 use crate::render::images::render_image;
 use crate::render::mermaid::render_mermaid;
-use crate::render::links::osc8_link;
+use crate::render::links::osc8_link_for;
 
 /// Parse and render a markdown document to an ANSI string.
 pub fn render_document(markdown: &str, base_dir: Option<&Path>, config: &Config) -> Result<String> {
@@ -303,7 +303,9 @@ fn render_inline<'a>(
             for child in node.children() {
                 render_inline(child, &mut label, base_dir, config)?;
             }
-            output.push_str(&osc8_link(&url, &label));
+            let mut plain = String::new();
+            collect_text(node, &mut plain);
+            output.push_str(&osc8_link_for(&url, &label, &plain));
         }
 
         NodeValue::Image(img) => {
@@ -851,6 +853,16 @@ mod tests {
         let link = crate::render::links::osc8_link("https://example.com/a", "label");
         // "label" + " (→ https://example.com/a)"
         assert_eq!(visible_len(&link), "label (→ https://example.com/a)".chars().count());
+    }
+
+    #[test]
+    fn autolink_does_not_repeat_url_but_named_link_does() {
+        let auto = render_document("<https://x.com>\n", None, &test_config(80)).unwrap();
+        assert!(!auto.contains('→'), "{auto:?}");
+        let mail = render_document("<me@x.com>\n", None, &test_config(80)).unwrap();
+        assert!(!mail.contains('→'), "{mail:?}");
+        let named = render_document("[site](https://x.com)\n", None, &test_config(80)).unwrap();
+        assert!(named.contains("(→ https://x.com)"), "{named:?}");
     }
 
     #[test]
