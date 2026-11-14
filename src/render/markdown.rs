@@ -345,7 +345,8 @@ fn render_list_item<'a>(
     tight: bool,
     bullet: &str,
 ) -> Result<()> {
-    let indent = parent_indent + 2;
+    // Content hangs under the text after the marker, so wider markers ("1.", "10.") indent more.
+    let indent = parent_indent + display_width(bullet) + 1;
     let prefix = " ".repeat(parent_indent);
     output.push_str(&format!("{prefix}\x1b[1m{bullet}\x1b[0m "));
 
@@ -1012,5 +1013,51 @@ mod tests {
         for line in out.lines() {
             assert!(visible_len(line) <= 30, "line too wide: {line:?}");
         }
+    }
+
+    /// Column at which the text after the list marker starts on the first line.
+    fn first_text_column(line: &str) -> usize {
+        let marker_end = line.find("\x1b[0m ").expect("marker") + "\x1b[0m ".len();
+        visible_len(&line[..marker_end])
+    }
+
+    #[test]
+    fn wrapped_ordered_item_lines_align_with_text_after_number() {
+        let md = "1. alpha beta gamma delta epsilon zeta eta theta iota kappa\n";
+        let result = render_document(md, None, &test_config(24)).unwrap();
+        let lines: Vec<&str> = result.lines().filter(|l| !l.is_empty()).collect();
+        assert!(lines.len() > 1, "{result:?}");
+        let column = first_text_column(lines[0]);
+        assert_eq!(column, 3, "{result:?}");
+        for line in &lines[1..] {
+            let lead = line.len() - line.trim_start_matches(' ').len();
+            assert_eq!(lead, column, "continuation misaligned: {result:?}");
+        }
+        for line in &lines {
+            assert!(visible_len(line) <= 24, "line too wide: {line:?}");
+        }
+    }
+
+    #[test]
+    fn two_digit_ordered_item_wraps_under_its_text() {
+        let md = "10. alpha beta gamma delta epsilon zeta eta theta iota kappa\n";
+        let result = render_document(md, None, &test_config(24)).unwrap();
+        let lines: Vec<&str> = result.lines().filter(|l| !l.is_empty()).collect();
+        assert_eq!(first_text_column(lines[0]), 4, "{result:?}");
+        assert!(lines[1].starts_with("    ") && !lines[1].starts_with("     "), "{result:?}");
+    }
+
+    #[test]
+    fn nested_list_under_ordered_item_aligns_with_its_text() {
+        let result = render_document("1. a\n   - b\n", None, &test_config(80)).unwrap();
+        assert!(result.contains("\n   \x1b[1m•\x1b[0m b\n"), "{result:?}");
+    }
+
+    #[test]
+    fn bullet_item_continuation_indent_is_unchanged() {
+        let md = "- alpha beta gamma delta epsilon zeta eta theta iota kappa\n";
+        let result = render_document(md, None, &test_config(24)).unwrap();
+        let lines: Vec<&str> = result.lines().filter(|l| !l.is_empty()).collect();
+        assert!(lines[1].starts_with("  ") && !lines[1].starts_with("   "), "{result:?}");
     }
 }
