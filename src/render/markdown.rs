@@ -275,30 +275,18 @@ fn render_inline<'a>(
 
         NodeValue::Strong => {
             drop(data);
-            output.push_str("\x1b[1m");
-            for child in node.children() {
-                render_inline(child, output, base_dir, config)?;
-            }
             // Switch off only bold so enclosing styles stay active.
-            output.push_str("\x1b[22m");
+            render_styled_span(node, output, base_dir, config, "\x1b[1m", "\x1b[22m")?;
         }
 
         NodeValue::Emph => {
             drop(data);
-            output.push_str("\x1b[3m");
-            for child in node.children() {
-                render_inline(child, output, base_dir, config)?;
-            }
-            output.push_str("\x1b[23m");
+            render_styled_span(node, output, base_dir, config, "\x1b[3m", "\x1b[23m")?;
         }
 
         NodeValue::Strikethrough => {
             drop(data);
-            output.push_str("\x1b[9m");
-            for child in node.children() {
-                render_inline(child, output, base_dir, config)?;
-            }
-            output.push_str("\x1b[29m");
+            render_styled_span(node, output, base_dir, config, "\x1b[9m", "\x1b[29m")?;
         }
 
         NodeValue::Code(code) => {
@@ -346,6 +334,29 @@ fn render_inline<'a>(
         }
     }
 
+    Ok(())
+}
+
+/// Render an inline span's children between `on` and `off` SGR codes.
+///
+/// Links, footnote references and image placeholders end with a full reset
+/// (`\x1b[0m`), which would also cancel this span's style for the rest of it;
+/// re-apply `on` after each such reset.
+fn render_styled_span<'a>(
+    node: &'a AstNode<'a>,
+    output: &mut String,
+    base_dir: Option<&Path>,
+    config: &Config,
+    on: &str,
+    off: &str,
+) -> Result<()> {
+    let mut inner = String::new();
+    for child in node.children() {
+        render_inline(child, &mut inner, base_dir, config)?;
+    }
+    output.push_str(on);
+    output.push_str(&inner.replace("\x1b[0m", &format!("\x1b[0m{on}")));
+    output.push_str(off);
     Ok(())
 }
 
@@ -997,6 +1008,41 @@ mod tests {
         assert!(result.contains("both\x1b[23m"), "{result:?}");
         assert!(!result.contains("both\x1b[0m"), "{result:?}");
         assert!(result.ends_with("still bold\x1b[22m\n\n"), "{result:?}");
+    }
+
+    /// True if `style` is (re-)applied after the last full reset before `marker`.
+    fn style_active_before(result: &str, marker: &str, style: &str) -> bool {
+        let head = &result[..result.find(marker).expect("marker present")];
+        match head.rfind("\x1b[0m") {
+            Some(reset) => head[reset..].contains(style),
+            None => head.contains(style),
+        }
+    }
+
+    #[test]
+    fn link_inside_bold_keeps_bold_after_it() {
+        let result = render_document("**see [docs](http://x) after**", None, &test_config(80)).unwrap();
+        assert!(style_active_before(&result, "after", "\x1b[1m"), "{result:?}");
+    }
+
+    #[test]
+    fn footnote_reference_inside_italics_keeps_italics_after_it() {
+        let result = render_document("*a[^n] after*\n\n[^n]: note", None, &test_config(80)).unwrap();
+        assert!(style_active_before(&result, "after", "\x1b[3m"), "{result:?}");
+    }
+
+    #[test]
+    fn image_placeholder_inside_strikethrough_keeps_strikethrough_after_it() {
+        let result = render_document("~~a ![pic](p.png) after~~", None, &test_config(80)).unwrap();
+        assert!(style_active_before(&result, "after", "\x1b[9m"), "{result:?}");
+    }
+
+    #[test]
+    fn link_inside_nested_bold_and_italics_keeps_both() {
+        let result = render_document("**b *i [l](http://x) after* tail**", None, &test_config(80)).unwrap();
+        assert!(style_active_before(&result, "after", "\x1b[1m"), "{result:?}");
+        assert!(style_active_before(&result, "after", "\x1b[3m"), "{result:?}");
+        assert!(style_active_before(&result, "tail", "\x1b[1m"), "{result:?}");
     }
 
     #[test]
