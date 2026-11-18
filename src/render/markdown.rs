@@ -556,7 +556,71 @@ fn html_block_text(html: &str) -> String {
         }
     }
     text.push_str(rest);
-    text.split_whitespace().collect::<Vec<_>>().join(" ")
+    decode_entities(&text.split_whitespace().collect::<Vec<_>>().join(" "))
+}
+
+/// Decode HTML character references (`&amp;`, `&#169;`, `&#xA9;`) in raw
+/// HTML text. Unknown or malformed references are left as written.
+fn decode_entities(s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    let mut rest = s;
+    while let Some(amp) = rest.find('&') {
+        out.push_str(&rest[..amp]);
+        rest = &rest[amp..];
+        // Entity names are short; don't scan far for the terminating ';'.
+        let decoded = rest[1..]
+            .char_indices()
+            .take(32)
+            .find(|&(_, c)| c == ';')
+            .and_then(|(i, _)| decode_entity(&rest[1..1 + i]).map(|c| (c, i + 2)));
+        match decoded {
+            Some((c, len)) => {
+                out.push(c);
+                rest = &rest[len..];
+            }
+            None => {
+                out.push('&');
+                rest = &rest[1..];
+            }
+        }
+    }
+    out.push_str(rest);
+    out
+}
+
+/// Decode one character reference body (the text between `&` and `;`).
+fn decode_entity(name: &str) -> Option<char> {
+    if let Some(num) = name.strip_prefix('#') {
+        let (digits, radix) = match num.strip_prefix(['x', 'X']) {
+            Some(hex) => (hex, 16),
+            None => (num, 10),
+        };
+        if digits.is_empty() || !digits.chars().all(|c| c.is_digit(radix)) {
+            return None;
+        }
+        let code = u32::from_str_radix(digits, radix).ok()?;
+        return char::from_u32(code);
+    }
+    let c = match name {
+        "amp" => '&',
+        "lt" => '<',
+        "gt" => '>',
+        "quot" => '"',
+        "apos" => '\'',
+        "nbsp" => '\u{a0}',
+        "copy" => '©',
+        "reg" => '®',
+        "trade" => '™',
+        "hellip" => '…',
+        "mdash" => '—',
+        "ndash" => '–',
+        "middot" => '·',
+        "bull" => '•',
+        "laquo" => '«',
+        "raquo" => '»',
+        _ => return None,
+    };
+    Some(c)
 }
 
 fn display_width(s: &str) -> usize {
@@ -756,6 +820,33 @@ mod tests {
         assert_eq!(html_block_text("<p align=\"c\">Hi\n  there</p>"), "Hi there");
         assert_eq!(html_block_text("<!-- x -->"), "");
         assert_eq!(html_block_text("a <br"), "a");
+    }
+
+    #[test]
+    fn html_block_entities_are_decoded() {
+        let result =
+            render_document("<p align=\"center\">Tom &amp; Jerry &lt;3</p>\n", None, &test_config(80)).unwrap();
+        assert!(result.contains("Tom & Jerry <3"), "got: {result:?}");
+        assert!(!result.contains("&amp;"), "got: {result:?}");
+    }
+
+    #[test]
+    fn decode_entities_helper() {
+        assert_eq!(decode_entities("a &amp; b"), "a & b");
+        assert_eq!(decode_entities("&quot;q&quot; &apos;s&#39;"), "\"q\" 's'");
+        assert_eq!(decode_entities("&#169; &#xA9; &#XA9;"), "© © ©");
+        assert_eq!(decode_entities("x&nbsp;y"), "x\u{a0}y");
+        assert_eq!(decode_entities("&copy; &mdash;"), "© —");
+    }
+
+    #[test]
+    fn decode_entities_leaves_unknown_or_malformed_text_alone() {
+        assert_eq!(decode_entities("AT&T"), "AT&T");
+        assert_eq!(decode_entities("&bogus; &"), "&bogus; &");
+        assert_eq!(decode_entities("&#;&#x;"), "&#;&#x;");
+        assert_eq!(decode_entities("&#+65;"), "&#+65;");
+        assert_eq!(decode_entities("&#xD800;"), "&#xD800;");
+        assert_eq!(decode_entities("&amp"), "&amp");
     }
 
     #[test]
