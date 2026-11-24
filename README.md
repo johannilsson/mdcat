@@ -93,7 +93,7 @@ that pager, so images and diagrams fall back to their alt text or source.
 | Option                      | Description                                                   |
 |-----------------------------|---------------------------------------------------------------|
 | `--pager`                   | Page the output                                               |
-| `--width <N>`               | Wrap at `N` columns instead of the detected width (`COLUMNS`) |
+| `--width <N>`               | Wrap at `N` columns instead of `$COLUMNS` or the detected width |
 | `--theme <NAME>`            | Syntax highlighting theme (default `base16-ocean.dark`)       |
 | `--no-images`               | Don't render images                                           |
 | `--no-mermaid`              | Show Mermaid blocks as code                                   |

@@ -27,8 +27,8 @@ struct Cli {
     #[arg(long)]
     pager: bool,
 
-    /// Terminal width override (defaults to detected width or 80)
-    #[arg(long, env = "COLUMNS")]
+    /// Terminal width override (defaults to $COLUMNS, then detected width, then 80)
+    #[arg(long, value_parser = clap::value_parser!(u16).range(1..))]
     width: Option<u16>,
 
     /// Disable inline image rendering
@@ -76,7 +76,11 @@ fn main() -> Result<()> {
         .unwrap_or(false);
 
     let config = render::Config {
-        width: cli.width.unwrap_or_else(terminal::width),
+        width: resolve_width(
+            cli.width,
+            std::env::var("COLUMNS").ok().as_deref(),
+            terminal::width,
+        ),
         images: !cli.no_images,
         mermaid: !cli.no_mermaid,
         mermaid_binary: cli.mermaid_binary.clone(),
@@ -101,6 +105,20 @@ fn main() -> Result<()> {
             run(files, config, pager_forced)
         }
     }
+}
+
+/// Pick the render width: an explicit `--width` wins, then a usable `$COLUMNS`,
+/// then the detected terminal width.
+///
+/// `$COLUMNS` is often set by shells and scripts without being validated, so an
+/// empty, non-numeric or zero value is ignored instead of aborting the program.
+fn resolve_width(flag: Option<u16>, columns_env: Option<&str>, detect: impl FnOnce() -> u16) -> u16 {
+    flag.or_else(|| {
+        columns_env
+            .and_then(|v| v.trim().parse::<u16>().ok())
+            .filter(|&w| w > 0)
+    })
+    .unwrap_or_else(detect)
 }
 
 fn run(files: Vec<PathBuf>, config: render::Config, use_pager: bool) -> Result<()> {
@@ -166,5 +184,41 @@ mod completions {
     pub fn print_completions(shell: &str) {
         // TODO: implement via clap_complete
         eprintln!("Completions for {shell} not yet implemented");
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn width_flag_takes_precedence_over_columns() {
+        assert_eq!(resolve_width(Some(50), Some("120"), || 80), 50);
+    }
+
+    #[test]
+    fn valid_columns_is_used_when_no_flag() {
+        assert_eq!(resolve_width(None, Some("120"), || 80), 120);
+        assert_eq!(resolve_width(None, Some(" 100 "), || 80), 100);
+    }
+
+    #[test]
+    fn invalid_columns_falls_back_to_detected_width() {
+        for bad in ["", "abc", "0", "-5", "99999999"] {
+            assert_eq!(resolve_width(None, Some(bad), || 77), 77, "COLUMNS={bad:?}");
+        }
+    }
+
+    #[test]
+    fn missing_columns_uses_detected_width() {
+        assert_eq!(resolve_width(None, None, || 77), 77);
+    }
+
+    #[test]
+    fn width_flag_rejects_zero_and_garbage() {
+        assert!(Cli::try_parse_from(["mdcat", "--width", "0"]).is_err());
+        assert!(Cli::try_parse_from(["mdcat", "--width", "abc"]).is_err());
+        let cli = Cli::try_parse_from(["mdcat", "--width", "40"]).unwrap();
+        assert_eq!(cli.width, Some(40));
     }
 }
