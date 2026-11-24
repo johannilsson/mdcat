@@ -53,23 +53,25 @@ fn render_node<'a>(
 
             let mut text = String::new();
             collect_text(node, &mut text);
-            let width = config.width as usize;
+            // Inside a list item, stay within the item's indent like other blocks.
+            let width = (config.width as usize).saturating_sub(indent);
+            let pad = " ".repeat(indent);
 
             match level {
                 1 => {
                     let line = "═".repeat(width.min(display_width(&text) + 4));
-                    output.push_str(&format!("\n\x1b[1;34m{line}\x1b[0m\n"));
-                    output.push_str(&format!("\x1b[1;34m  {text}\x1b[0m\n"));
-                    output.push_str(&format!("\x1b[1;34m{line}\x1b[0m\n\n"));
+                    output.push_str(&format!("\n{pad}\x1b[1;34m{line}\x1b[0m\n"));
+                    output.push_str(&format!("{pad}\x1b[1;34m  {text}\x1b[0m\n"));
+                    output.push_str(&format!("{pad}\x1b[1;34m{line}\x1b[0m\n\n"));
                 }
                 2 => {
                     let line = "─".repeat(width.min(display_width(&text) + 2));
-                    output.push_str(&format!("\n\x1b[1;36m{text}\x1b[0m\n"));
-                    output.push_str(&format!("\x1b[36m{line}\x1b[0m\n\n"));
+                    output.push_str(&format!("\n{pad}\x1b[1;36m{text}\x1b[0m\n"));
+                    output.push_str(&format!("{pad}\x1b[36m{line}\x1b[0m\n\n"));
                 }
-                3 => output.push_str(&format!("\n\x1b[1;33m### {text}\x1b[0m\n\n")),
-                4 => output.push_str(&format!("\n\x1b[1m#### {text}\x1b[0m\n\n")),
-                _ => output.push_str(&format!("\n\x1b[1m{text}\x1b[0m\n\n")),
+                3 => output.push_str(&format!("\n{pad}\x1b[1;33m### {text}\x1b[0m\n\n")),
+                4 => output.push_str(&format!("\n{pad}\x1b[1m#### {text}\x1b[0m\n\n")),
+                _ => output.push_str(&format!("\n{pad}\x1b[1m{text}\x1b[0m\n\n")),
             }
         }
 
@@ -1313,6 +1315,38 @@ mod tests {
         for line in out.lines() {
             assert!(visible_len(line) <= 30, "line too wide: {line:?}");
         }
+    }
+
+    #[test]
+    fn heading_in_list_item_is_indented() {
+        for level in 1..=6 {
+            let md = format!("- item\n\n  {} Title\n", "#".repeat(level));
+            let out = render_document(&md, None, &test_config(80)).unwrap();
+            let heading_lines: Vec<&str> = out
+                .lines()
+                .filter(|l| l.contains("Title") || l.contains('═') || l.contains('─'))
+                .collect();
+            assert!(!heading_lines.is_empty(), "{out:?}");
+            for line in heading_lines {
+                assert!(line.starts_with("  \x1b["), "h{level} line not indented: {line:?}");
+            }
+        }
+    }
+
+    #[test]
+    fn heading_underline_in_list_item_fits_reduced_width() {
+        let md = "- item\n\n  # A heading long enough to fill the width\n\n  ## Another heading as long as the first\n";
+        let out = render_document(md, None, &test_config(30)).unwrap();
+        for line in out.lines().filter(|l| l.contains('═') || l.contains('─')) {
+            assert!(visible_len(line) <= 30, "underline too wide: {line:?}");
+        }
+    }
+
+    #[test]
+    fn top_level_heading_is_not_indented() {
+        let out = render_document("## Title\n", None, &test_config(80)).unwrap();
+        let title = out.lines().find(|l| l.contains("Title")).expect("title");
+        assert!(title.starts_with("\x1b[1;36mTitle"), "{title:?}");
     }
 
     /// Column at which the text after the list marker starts on the first line.
