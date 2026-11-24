@@ -275,6 +275,13 @@ fn render_inline<'a>(
             drop(data);
         }
 
+        // `<br>` is the usual way to break a line inside a table cell or list
+        // item; treat it like a hard line break instead of dropping it.
+        NodeValue::HtmlInline(html) if is_br_tag(html) => {
+            drop(data);
+            output.push('\n');
+        }
+
         NodeValue::Strong => {
             drop(data);
             // Switch off only bold so enclosing styles stay active.
@@ -525,6 +532,7 @@ fn collect_text<'a>(node: &'a AstNode<'a>, output: &mut String) {
         NodeValue::Text(text) => output.push_str(text),
         NodeValue::Code(code) => output.push_str(&code.literal),
         NodeValue::SoftBreak | NodeValue::LineBreak => output.push(' '),
+        NodeValue::HtmlInline(html) if is_br_tag(html) => output.push(' '),
         _ => {
             drop(data);
             for child in node.children() {
@@ -534,7 +542,15 @@ fn collect_text<'a>(node: &'a AstNode<'a>, output: &mut String) {
     }
 }
 
-/// Terminal display width of plain text (wide CJK characters take two columns).
+/// Whether an inline HTML fragment is a `<br>` tag (`<br>`, `<br/>`, `<br />`, any case).
+fn is_br_tag(html: &str) -> bool {
+    let Some(inner) = html.strip_prefix('<').and_then(|h| h.strip_suffix('>')) else {
+        return false;
+    };
+    let inner = inner.strip_suffix('/').unwrap_or(inner).trim_end();
+    inner.eq_ignore_ascii_case("br")
+}
+
 /// Extract the visible text of a raw HTML block: comments and tags are
 /// removed and whitespace is collapsed.
 fn html_block_text(html: &str) -> String {
@@ -638,6 +654,7 @@ fn sanitize_control_chars(s: &str) -> String {
         .collect()
 }
 
+/// Terminal display width of plain text (wide CJK characters take two columns).
 fn display_width(s: &str) -> usize {
     UnicodeWidthStr::width(s)
 }
@@ -1044,6 +1061,38 @@ mod tests {
     fn hard_line_break_is_indented_in_list_item() {
         let result = render_document("- first  \n  second\n", None, &test_config(80)).unwrap();
         assert!(result.contains("first\n  second"), "{result:?}");
+    }
+
+    #[test]
+    fn html_br_tag_is_a_line_break() {
+        for br in ["<br>", "<br/>", "<br />", "<BR>"] {
+            let md = format!("first{br}second\n");
+            let result = render_document(&md, None, &test_config(80)).unwrap();
+            assert!(result.contains("first\nsecond"), "{br}: {result:?}");
+        }
+    }
+
+    #[test]
+    fn html_br_tag_is_indented_in_list_item() {
+        let result = render_document("- first<br>second\n", None, &test_config(80)).unwrap();
+        assert!(result.contains("first\n  second"), "{result:?}");
+    }
+
+    #[test]
+    fn html_br_tag_separates_words_in_table_cells_and_headings() {
+        let result = render_document("| A |\n|---|\n| one<br>two |\n", None, &test_config(80)).unwrap();
+        assert!(result.contains("one two"), "{result:?}");
+        let result = render_document("## one<br>two\n", None, &test_config(80)).unwrap();
+        assert!(result.contains("one two"), "{result:?}");
+    }
+
+    #[test]
+    fn other_inline_html_tags_are_still_dropped() {
+        let result = render_document("press <kbd>Ctrl</kbd> now\n", None, &test_config(80)).unwrap();
+        assert!(result.contains("press Ctrl now"), "{result:?}");
+        assert!(!result.contains("<kbd>"), "{result:?}");
+        assert!(is_br_tag("<br>") && is_br_tag("<br/>") && is_br_tag("<Br />"));
+        assert!(!is_br_tag("<b>") && !is_br_tag("<brx>") && !is_br_tag("</br>x"));
     }
 
     #[test]
