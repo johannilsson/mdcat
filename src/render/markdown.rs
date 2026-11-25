@@ -461,7 +461,7 @@ fn render_table<'a>(
     // Shrink columns (wrapping their text) until the table fits the terminal.
     // Stacked layout is only a last resort when even the minimum widths don't fit.
     let Some(col_widths) = fit_column_widths(&rows, col_widths, config.width as usize) else {
-        render_stacked_table(&rows, output, config.width as usize);
+        render_stacked_table(&rows, output, config.width as usize, alignments);
         return Ok(());
     };
 
@@ -595,7 +595,7 @@ fn wrap_cell(text: &str, width: usize) -> Vec<String> {
     lines
 }
 
-fn render_stacked_table(rows: &[Vec<String>], output: &mut String, width: usize) {
+fn render_stacked_table(rows: &[Vec<String>], output: &mut String, width: usize, alignments: &[TableAlignment]) {
     let headers = &rows[0];
     let label_width = headers.iter().map(|h| display_width(h)).max().unwrap_or(0);
 
@@ -607,6 +607,11 @@ fn render_stacked_table(rows: &[Vec<String>], output: &mut String, width: usize)
         output.push('\n');
         return;
     }
+
+    // Right/centre-aligned values are padded within the widest value that still
+    // fits beside the label; left-aligned values stay unpadded (no trailing spaces).
+    let max_value = rows[1..].iter().flatten().map(|v| display_width(v)).max().unwrap_or(0);
+    let value_width = max_value.min(width.saturating_sub(label_width + 3));
 
     for (i, row) in rows[1..].iter().enumerate() {
         let row_label = format!(" Row {} ", i + 1);
@@ -622,6 +627,11 @@ fn render_stacked_table(rows: &[Vec<String>], output: &mut String, width: usize)
 
         for (j, header) in headers.iter().enumerate() {
             let value = row.get(j).map(|s| s.as_str()).unwrap_or("");
+            let align = alignments.get(j).copied().unwrap_or(TableAlignment::None);
+            let value = match align {
+                TableAlignment::Right | TableAlignment::Center => pad_aligned(value, value_width, align),
+                _ => value.to_string(),
+            };
             output.push_str(&format!("\x1b[1m{}\x1b[0m : {}\n", pad_to(header, label_width), value));
         }
         output.push('\n');
@@ -1178,13 +1188,30 @@ mod tests {
     }
 
     #[test]
+    fn stacked_table_honours_column_alignment() {
+        let rows = vec![
+            vec!["L".to_string(), "R".to_string(), "C".to_string()],
+            vec!["a".to_string(), "b".to_string(), "c".to_string()],
+            vec!["aaaaa".to_string(), "bbbbb".to_string(), "ccccc".to_string()],
+        ];
+        let aligns = [TableAlignment::Left, TableAlignment::Right, TableAlignment::Center];
+        let mut out = String::new();
+        render_stacked_table(&rows, &mut out, 40, &aligns);
+        let plain = out.replace("\x1b[2m", "").replace("\x1b[1m", "").replace("\x1b[0m", "");
+        let lines: Vec<&str> = plain.lines().collect();
+        assert!(lines.contains(&"L : a"), "{plain}");
+        assert!(lines.contains(&"R :     b"), "{plain}");
+        assert!(lines.contains(&"C :   c  "), "{plain}");
+    }
+
+    #[test]
     fn stacked_table_aligns_non_ascii_headers() {
         let rows = vec![
             vec!["Nämé".to_string(), "x".to_string()],
             vec!["a".to_string(), "b".to_string()],
         ];
         let mut out = String::new();
-        render_stacked_table(&rows, &mut out, 40);
+        render_stacked_table(&rows, &mut out, 40, &[]);
         assert!(out.contains("Nämé\x1b[0m : a"), "{out:?}");
         assert!(out.contains("x   \x1b[0m : b"), "{out:?}");
     }
