@@ -1122,6 +1122,14 @@ mod tests {
     }
 
     #[test]
+    fn link_with_empty_destination_renders_plain_text() {
+        let out = render_document("see [empty]() here\n", None, &test_config(80)).unwrap();
+        assert!(!out.contains("\x1b]8"), "{out:?}");
+        assert!(!out.contains('→'), "{out:?}");
+        assert!(out.contains("see empty here"), "{out:?}");
+    }
+
+    #[test]
     fn list_item_text_follows_bullet_with_single_space() {
         let result = render_document("- a\n- b\n", None, &test_config(80)).unwrap();
         assert!(result.contains("•\x1b[0m a\n"), "{result:?}");
