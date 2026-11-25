@@ -14,3 +14,34 @@ pub fn show(content: String) -> Result<()> {
     minus::page_all(pager)?;
     Ok(())
 }
+
+/// Like [`show`], but `refresh` is polled while paging and any new content it
+/// returns replaces the text on screen.
+///
+/// The pager runs on its own thread so this one stays free to call `refresh`
+/// (the render config isn't `Send`). `dynamic_paging` is used because the
+/// static variant exits early when the content fits the screen.
+#[cfg_attr(not(feature = "annotations"), allow(dead_code))]
+pub fn show_live(content: String, mut refresh: impl FnMut() -> Option<String>) -> Result<()> {
+    let pager = minus::Pager::new();
+    pager.set_text(content)?;
+    pager.set_prompt("mdcat")?;
+
+    std::thread::scope(|scope| {
+        let paging = scope.spawn({
+            let pager = pager.clone();
+            move || minus::dynamic_paging(pager)
+        });
+        while !paging.is_finished() {
+            std::thread::sleep(crate::watch::POLL_INTERVAL);
+            if let Some(text) = refresh() {
+                // Fails only once the pager has quit.
+                let _ = pager.set_text(text);
+            }
+        }
+        paging
+            .join()
+            .map_err(|_| anyhow::anyhow!("pager thread panicked"))?
+            .map_err(Into::into)
+    })
+}

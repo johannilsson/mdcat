@@ -40,6 +40,10 @@ annotations from the file's [Folio](https://github.com/johannilsson/folio) sidec
 replies under the paragraph, heading or table it belongs to. It only reads the sidecar;
 accept and reject them with `folio` or the Folio app.
 
+In the pager (`--pager`, or `mdless`) the view follows Folio: when the file or its sidecar
+changes, mdcat re-renders and keeps your scroll position, so new comments and edits show up
+without restarting.
+
 ## Usage
 
 ```

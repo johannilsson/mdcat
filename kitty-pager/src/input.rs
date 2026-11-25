@@ -1,5 +1,6 @@
 use std::collections::HashSet;
 use std::io::Write;
+use std::time::Duration;
 
 use anyhow::Result;
 use crossterm::{
@@ -12,11 +13,16 @@ use crate::document::KittyDocument;
 use crate::renderer::{layout, render_frame};
 use crate::PagerOptions;
 
+/// How long to wait for input before asking for a refreshed document.
+const REFRESH_INTERVAL: Duration = Duration::from_millis(250);
+
+type Refresh<'a> = Option<&'a mut dyn FnMut() -> Option<KittyDocument>>;
+
 /// Run the interactive pager event loop.
-pub(crate) fn run_pager(doc: &KittyDocument, opts: &PagerOptions) -> Result<()> {
+pub(crate) fn run_pager(mut doc: KittyDocument, opts: &PagerOptions, refresh: Refresh) -> Result<()> {
     let cell_w = opts.cell_pixel_width.max(1);
     let cell_h = opts.cell_pixel_height.max(1);
-    let mut entries = layout(doc, cell_w, cell_h);
+    let mut entries = layout(&doc, cell_w, cell_h);
     if entries.is_empty() {
         return Ok(());
     }
@@ -27,7 +33,7 @@ pub(crate) fn run_pager(doc: &KittyDocument, opts: &PagerOptions) -> Result<()> 
     write!(stdout, "\x1b[?7l")?;
     stdout.flush()?;
 
-    let result = event_loop(doc, &mut entries, opts, &mut stdout);
+    let result = event_loop(&mut doc, &mut entries, opts, &mut stdout, refresh);
 
     let _ = write!(stdout, "\x1b[?7h");
     let _ = stdout.flush();
@@ -38,10 +44,11 @@ pub(crate) fn run_pager(doc: &KittyDocument, opts: &PagerOptions) -> Result<()> 
 }
 
 fn event_loop(
-    doc: &KittyDocument,
+    doc: &mut KittyDocument,
     entries: &mut Vec<crate::renderer::LayoutEntry>,
     opts: &PagerOptions,
     stdout: &mut impl Write,
+    mut refresh: Refresh,
 ) -> Result<()> {
     let mut top_entry = 0usize;
     let mut transmitted: HashSet<u32> = HashSet::new();
@@ -54,6 +61,23 @@ fn event_loop(
     stdout.flush()?;
 
     loop {
+        if !event::poll(REFRESH_INTERVAL)? {
+            if let Some(new_doc) = refresh.as_mut().and_then(|r| r()) {
+                *doc = new_doc;
+                *entries = layout(doc, cell_w, cell_h);
+                top_entry = top_entry.min(entries.len().saturating_sub(1));
+                // The new document numbers its images from scratch, so the
+                // terminal's copies of the old ones must not be reused.
+                write!(stdout, "\x1b_Ga=d,d=A,q=2;\x1b\\")?;
+                transmitted.clear();
+                let frame = render_frame(
+                    doc, entries, top_entry, screen_rows, cell_w, cell_h, &mut transmitted,
+                );
+                write!(stdout, "{}", frame)?;
+                stdout.flush()?;
+            }
+            continue;
+        }
         match event::read()? {
             Event::Key(KeyEvent { code, modifiers, .. }) => {
                 let max_top = entries.len().saturating_sub(1);
