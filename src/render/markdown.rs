@@ -458,13 +458,12 @@ fn render_table<'a>(
         }
     }
 
-    // Total width: left border + (col_width + 2 padding) per col + separator per col + right border
-    let total_width: usize = 1 + col_widths.iter().map(|w| w + 2).sum::<usize>() + cols;
-
-    if total_width > config.width as usize {
+    // Shrink columns (wrapping their text) until the table fits the terminal.
+    // Stacked layout is only a last resort when even the minimum widths don't fit.
+    let Some(col_widths) = fit_column_widths(&rows, col_widths, config.width as usize) else {
         render_stacked_table(&rows, output, config.width as usize);
         return Ok(());
-    }
+    };
 
     let sep: String = col_widths.iter().map(|w| "─".repeat(w + 2)).collect::<Vec<_>>().join("┼");
     let top: String = col_widths.iter().map(|w| "─".repeat(w + 2)).collect::<Vec<_>>().join("┬");
@@ -473,17 +472,24 @@ fn render_table<'a>(
     output.push_str(&format!("\x1b[2m┌{top}┐\x1b[0m\n"));
 
     for (i, row) in rows.iter().enumerate() {
-        let cells: String = row.iter().enumerate().map(|(j, cell)| {
-            let width = col_widths.get(j).copied().unwrap_or(0);
-            let align = alignments.get(j).copied().unwrap_or(TableAlignment::None);
-            if i == 0 {
-                format!(" \x1b[1m{}\x1b[0m ", pad_aligned(cell, width, align))
-            } else {
-                format!(" {} ", pad_aligned(cell, width, align))
-            }
-        }).collect::<Vec<_>>().join("\x1b[2m│\x1b[0m");
+        let wrapped: Vec<Vec<String>> = (0..cols)
+            .map(|j| wrap_cell(row.get(j).map(String::as_str).unwrap_or(""), col_widths[j]))
+            .collect();
+        let height = wrapped.iter().map(Vec::len).max().unwrap_or(1);
 
-        output.push_str(&format!("\x1b[2m│\x1b[0m{cells}\x1b[2m│\x1b[0m\n"));
+        for line_idx in 0..height {
+            let cells: String = wrapped.iter().enumerate().map(|(j, lines)| {
+                let text = lines.get(line_idx).map(String::as_str).unwrap_or("");
+                let align = alignments.get(j).copied().unwrap_or(TableAlignment::None);
+                if i == 0 {
+                    format!(" \x1b[1m{}\x1b[0m ", pad_aligned(text, col_widths[j], align))
+                } else {
+                    format!(" {} ", pad_aligned(text, col_widths[j], align))
+                }
+            }).collect::<Vec<_>>().join("\x1b[2m│\x1b[0m");
+
+            output.push_str(&format!("\x1b[2m│\x1b[0m{cells}\x1b[2m│\x1b[0m\n"));
+        }
 
         if i == 0 {
             output.push_str(&format!("\x1b[2m├{sep}┤\x1b[0m\n"));
@@ -492,6 +498,101 @@ fn render_table<'a>(
 
     output.push_str(&format!("\x1b[2m└{bot}┘\x1b[0m\n\n"));
     Ok(())
+}
+
+/// Widest a column's minimum may be: long unbroken words are hard-broken beyond this.
+const MAX_MIN_COL_WIDTH: usize = 12;
+
+/// Shrink `widths` so the whole table (borders and padding included) fits in
+/// `total` columns. Returns `None` if even the minimum widths don't fit.
+fn fit_column_widths(rows: &[Vec<String>], mut widths: Vec<usize>, total: usize) -> Option<Vec<usize>> {
+    let cols = widths.len();
+    // left border + one separator per column + 2 padding per column
+    let overhead = 1 + cols + 2 * cols;
+    let available = total.checked_sub(overhead)?;
+    if widths.iter().sum::<usize>() <= available {
+        return Some(widths);
+    }
+
+    let mins: Vec<usize> = (0..cols)
+        .map(|j| {
+            let longest_word = rows
+                .iter()
+                .filter_map(|r| r.get(j))
+                .flat_map(|c| c.split_whitespace())
+                .map(display_width)
+                .max()
+                .unwrap_or(1);
+            longest_word.clamp(1, MAX_MIN_COL_WIDTH).min(widths[j].max(1))
+        })
+        .collect();
+    if mins.iter().sum::<usize>() > available {
+        return None;
+    }
+
+    while widths.iter().sum::<usize>() > available {
+        // Shave one column off the widest column that can still shrink.
+        let (idx, _) = widths
+            .iter()
+            .enumerate()
+            .filter(|(j, w)| **w > mins[*j])
+            .max_by_key(|(_, w)| **w)?;
+        widths[idx] -= 1;
+    }
+    Some(widths)
+}
+
+/// Word-wrap a table cell to `width` display columns, hard-breaking words that
+/// are wider than the column. Always returns at least one line.
+fn wrap_cell(text: &str, width: usize) -> Vec<String> {
+    let width = width.max(1);
+    let mut lines: Vec<String> = Vec::new();
+    let mut current = String::new();
+    let mut current_w = 0usize;
+
+    for word in text.split_whitespace() {
+        let mut word = word;
+        let mut w = display_width(word);
+        // Break words that can never fit on a line of their own.
+        while w > width {
+            if current_w > 0 {
+                lines.push(std::mem::take(&mut current));
+                current_w = 0;
+            }
+            let mut taken = 0usize;
+            let mut end = 0usize;
+            for (i, ch) in word.char_indices() {
+                let cw = UnicodeWidthChar::width(ch).unwrap_or(0);
+                if taken + cw > width && end > 0 {
+                    break;
+                }
+                taken += cw;
+                end = i + ch.len_utf8();
+            }
+            lines.push(word[..end].to_string());
+            word = &word[end..];
+            w = display_width(word);
+        }
+        if word.is_empty() {
+            continue;
+        }
+        if current_w == 0 {
+            current.push_str(word);
+            current_w = w;
+        } else if current_w + 1 + w <= width {
+            current.push(' ');
+            current.push_str(word);
+            current_w += 1 + w;
+        } else {
+            lines.push(std::mem::take(&mut current));
+            current.push_str(word);
+            current_w = w;
+        }
+    }
+    if current_w > 0 || lines.is_empty() {
+        lines.push(current);
+    }
+    lines
 }
 
 fn render_stacked_table(rows: &[Vec<String>], output: &mut String, width: usize) {
@@ -1011,6 +1112,69 @@ mod tests {
         let md = "| ééééé |\n|---|\n| ééééé |\n";
         let result = render_document(md, None, &test_config(10)).unwrap();
         assert!(result.contains('┌'), "table should not fall back to stacked layout: {result:?}");
+    }
+
+    #[test]
+    fn wrap_cell_wraps_on_words() {
+        assert_eq!(wrap_cell("aa bb cc", 5), vec!["aa bb", "cc"]);
+        assert_eq!(wrap_cell("", 5), vec![""]);
+        assert_eq!(wrap_cell("a", 1), vec!["a"]);
+    }
+
+    #[test]
+    fn wrap_cell_hard_breaks_long_words_and_wide_chars() {
+        assert_eq!(wrap_cell("abcdefgh", 3), vec!["abc", "def", "gh"]);
+        assert_eq!(wrap_cell("日本語", 4), vec!["日本", "語"]);
+        assert_eq!(wrap_cell("日", 1), vec!["日"]);
+    }
+
+    #[test]
+    fn wide_table_wraps_instead_of_stacking() {
+        let md = "| Option | Description |\n|---|---|\n| `--width` | Wrap at N columns instead of the detected terminal width |\n";
+        let out = render_document(md, None, &test_config(40)).unwrap();
+        assert!(out.contains('┌'), "{out:?}");
+        assert!(!out.contains("Row 1"), "{out:?}");
+        for line in out.lines() {
+            assert!(visible_len(line) <= 40, "line too wide: {line:?}");
+        }
+        let plain = out.replace("\x1b[2m", "").replace("\x1b[0m", "").replace("\x1b[1m", "");
+        for word in ["Wrap", "columns", "terminal", "width", "--width"] {
+            assert!(plain.contains(word), "missing {word}: {plain}");
+        }
+        // Multi-line row: every table line has the same width.
+        let widths: Vec<usize> = out.lines().filter(|l| l.contains('│')).map(visible_len).collect();
+        assert!(widths.len() > 3 && widths.iter().all(|w| *w == widths[0]), "{widths:?}");
+    }
+
+    #[test]
+    fn wrapped_table_honours_alignment() {
+        let md = "| a | b |\n|--:|:-:|\n| x | one two three four five six |\n";
+        let out = render_document(md, None, &test_config(24)).unwrap();
+        assert!(out.contains('┌'), "{out:?}");
+        for line in out.lines() {
+            assert!(visible_len(line) <= 24, "line too wide: {line:?}");
+        }
+    }
+
+    #[test]
+    fn table_falls_back_to_stacked_when_minimum_widths_do_not_fit() {
+        let md = "| alpha | beta | gamma |\n|---|---|---|\n| one | two | three |\n";
+        let out = render_document(md, None, &test_config(12)).unwrap();
+        assert!(out.contains("Row 1"), "{out:?}");
+        assert!(!out.contains('┌'), "{out:?}");
+    }
+
+    #[test]
+    fn fit_column_widths_shrinks_widest_first() {
+        let rows = vec![
+            vec!["a".to_string(), "long text here please".to_string()],
+            vec!["b".to_string(), "more words".to_string()],
+        ];
+        let fitted = fit_column_widths(&rows, vec![1, 21], 20).unwrap();
+        // overhead = 1 + 2 + 4 = 7 → 13 columns of content
+        assert_eq!(fitted.iter().sum::<usize>(), 13);
+        assert_eq!(fitted[0], 1);
+        assert!(fit_column_widths(&rows, vec![1, 21], 8).is_none());
     }
 
     #[test]
