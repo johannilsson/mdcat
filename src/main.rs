@@ -116,13 +116,13 @@ fn main() -> Result<()> {
 fn run(files: Vec<PathBuf>, config: render::Config, use_pager: bool) -> Result<()> {
     let mut sources = input::collect(files)?;
 
-    // With annotations on, keep a paged view in step with Folio's edits.
+    // Keep a paged view in step with its files, and with `--annotations`
+    // with Folio's sidecars too.
     #[cfg(feature = "annotations")]
-    let mut watcher = (use_pager && config.annotations)
-        .then(|| watch::Watcher::for_sources(&sources))
-        .flatten();
+    let sidecars = config.annotations;
     #[cfg(not(feature = "annotations"))]
-    let mut watcher: Option<watch::Watcher> = None;
+    let sidecars = false;
+    let mut watcher = use_pager.then(|| watch::Watcher::for_sources(&sources, sidecars)).flatten();
 
     let protocol = terminal::detect_image_protocol(config.image_protocol.as_deref());
 

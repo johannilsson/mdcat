@@ -18,7 +18,7 @@ mdcat --pager README.md   # scroll long files
 - Images via Kitty, iTerm2, or Unicode block fallback
 - Mermaid diagrams (requires `mmdc` from mermaid-cli)
 - SVG support
-- Built-in pager that preserves terminal graphics
+- Built-in pager that preserves terminal graphics, and reloads when the file changes
 
 ## Install
 
@@ -40,9 +40,8 @@ annotations from the file's [Folio](https://github.com/johannilsson/folio) sidec
 replies under the paragraph, heading or table it belongs to. It only reads the sidecar;
 accept and reject them with `folio` or the Folio app.
 
-In the pager (`--pager`, or `mdless`) the view follows Folio: when the file or its sidecar
-changes, mdcat re-renders and keeps your scroll position, so new comments and edits show up
-without restarting.
+In the pager the sidecar is followed too: when it changes, mdcat re-renders, so new
+comments and edits show up without restarting.
 
 ## Usage
 

@@ -21,7 +21,6 @@ pub fn show(content: String) -> Result<()> {
 /// The pager runs on its own thread so this one stays free to call `refresh`
 /// (the render config isn't `Send`). `dynamic_paging` is used because the
 /// static variant exits early when the content fits the screen.
-#[cfg_attr(not(feature = "annotations"), allow(dead_code))]
 pub fn show_live(content: String, mut refresh: impl FnMut() -> Option<String>) -> Result<()> {
     let pager = minus::Pager::new();
     pager.set_text(content)?;

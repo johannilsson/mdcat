@@ -55,7 +55,6 @@ pub fn collect(files: Vec<PathBuf>) -> Result<Vec<Source>> {
     Ok(sources)
 }
 
-#[cfg_attr(not(feature = "annotations"), allow(dead_code))]
 /// Re-read the content of every file-backed source, leaving stdin sources as
 /// they are. On error nothing is changed, so a file caught mid-write keeps its
 /// previous content.

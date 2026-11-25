@@ -1,13 +1,10 @@
-//! Change detection for `--annotations`: while paging, the markdown files and
-//! their Folio sidecars are polled so edits made in Folio show up live.
-
-#![cfg_attr(not(feature = "annotations"), allow(dead_code))]
+//! Change detection for the pager: while paging, the markdown files (and, with
+//! `--annotations`, their Folio sidecars) are polled so edits show up live.
 
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::time::{Duration, SystemTime};
 
-#[cfg(feature = "annotations")]
 use crate::input::Source;
 
 /// How often the pagers check for changes while idle.
@@ -33,14 +30,15 @@ impl Watcher {
         Self { files }
     }
 
-    #[cfg(feature = "annotations")]
-    /// Watches every file source and its Folio sidecar (which may not exist
-    /// yet). `None` when there is nothing to watch, e.g. only stdin.
-    pub fn for_sources(sources: &[Source]) -> Option<Self> {
+    /// Watches every file source, and with `sidecars` its Folio sidecar too
+    /// (which may not exist yet). `None` when there is nothing to watch,
+    /// e.g. only stdin.
+    pub fn for_sources(sources: &[Source], sidecars: bool) -> Option<Self> {
         let paths: Vec<PathBuf> = sources
             .iter()
             .filter_map(|s| s.path.as_deref())
-            .flat_map(|p| [p.to_path_buf(), sidecar_path(p)])
+            .flat_map(|p| [Some(p.to_path_buf()), sidecars.then(|| sidecar_path(p))])
+            .flatten()
             .collect();
         (!paths.is_empty()).then(|| Self::new(paths))
     }
@@ -67,6 +65,12 @@ fn stamp(path: &Path) -> Stamp {
 #[cfg(feature = "annotations")]
 fn sidecar_path(file: &Path) -> PathBuf {
     folio::location::folio_path(file)
+}
+
+#[cfg(not(feature = "annotations"))]
+fn sidecar_path(file: &Path) -> PathBuf {
+    // Never asked for: `--annotations` doesn't exist without the feature.
+    file.to_path_buf()
 }
 
 #[cfg(test)]
@@ -110,7 +114,6 @@ mod tests {
         assert!(w.changed());
     }
 
-    #[cfg(feature = "annotations")]
     fn source(path: Option<PathBuf>) -> Source {
         Source { name: "x".into(), content: String::new(), base_dir: None, path }
     }
@@ -122,7 +125,7 @@ mod tests {
         let md = dir.path().join("a.md");
         fs::write(&md, "x").unwrap();
 
-        let mut w = Watcher::for_sources(&[source(Some(md.clone()))]).unwrap();
+        let mut w = Watcher::for_sources(&[source(Some(md.clone()))], true).unwrap();
         assert_eq!(w.files.len(), 2);
         assert!(!w.changed());
         // The sidecar lives under a `.folio` directory that may not exist yet.
@@ -132,9 +135,21 @@ mod tests {
         assert!(w.changed());
     }
 
-    #[cfg(feature = "annotations")]
     #[test]
     fn for_sources_has_nothing_to_watch_for_stdin() {
-        assert!(Watcher::for_sources(&[source(None)]).is_none());
+        assert!(Watcher::for_sources(&[source(None)], true).is_none());
+    }
+
+    #[test]
+    fn for_sources_watches_only_the_files_without_sidecars() {
+        let dir = tempfile::tempdir().unwrap();
+        let md = dir.path().join("a.md");
+        fs::write(&md, "x").unwrap();
+
+        let mut w = Watcher::for_sources(&[source(Some(md.clone()))], false).unwrap();
+        assert_eq!(w.files.len(), 1);
+        assert!(!w.changed());
+        fs::write(&md, "changed").unwrap();
+        assert!(w.changed());
     }
 }
