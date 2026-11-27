@@ -99,8 +99,9 @@ fn render_node<'a>(
             for child in node.children() {
                 render_node(child, &mut inner, base_dir, &inner_config, 0, false)?;
             }
-            // Block children end with a blank separator line; don't draw it as a quote line.
-            for line in inner.trim_end_matches('\n').lines() {
+            // Block children end with a blank separator line, and headings start with
+            // one; don't draw either as an empty quote line at the edges of the quote.
+            for line in inner.trim_matches('\n').lines() {
                 // Inline resets (\x1b[0m) would end the quote's italics; re-apply after each.
                 let line = line
                     .replace("\x1b[0m", "\x1b[0m\x1b[3m")
@@ -1450,6 +1451,26 @@ mod tests {
                 "empty quote line in: {result:?}"
             );
         }
+    }
+
+    #[test]
+    fn block_quote_starting_with_heading_has_no_leading_empty_quote_line() {
+        for md in ["> # Title\n>\n> text\n", "> ## Sub\n", "> ### Third\n"] {
+            let result = render_document(md, None, &test_config(40)).unwrap();
+            let first = result.lines().find(|l| l.contains('│')).unwrap();
+            assert_ne!(
+                first, "\x1b[2m│\x1b[0m \x1b[3m\x1b[0m",
+                "empty first quote line for {md:?}: {result:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn block_quote_keeps_blank_line_between_heading_and_text() {
+        let result = render_document("> ### Title\n> text\n", None, &test_config(40)).unwrap();
+        let quote: Vec<&str> = result.lines().filter(|l| l.contains('│')).collect();
+        assert_eq!(quote.len(), 3, "got: {result:?}");
+        assert!(quote[0].contains("Title") && quote[2].contains("text"), "got: {result:?}");
     }
 
     #[test]
