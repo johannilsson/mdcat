@@ -34,5 +34,16 @@ impl Default for PagerOptions {
 ///
 /// Returns when the user presses `q`, `Q`, or `Esc`.
 pub fn page(doc: KittyDocument, opts: PagerOptions) -> anyhow::Result<()> {
-    input::run_pager(&doc, &opts)
+    input::run_pager(doc, &opts, None)
+}
+
+/// Like [`page`], but `refresh` is called every 250 ms while the user is idle.
+/// When it returns a new document, that replaces the current one in place and
+/// the scroll position is kept (clamped to the new length).
+pub fn page_with_refresh(
+    doc: KittyDocument,
+    opts: PagerOptions,
+    refresh: &mut dyn FnMut() -> Option<KittyDocument>,
+) -> anyhow::Result<()> {
+    input::run_pager(doc, &opts, Some(refresh))
 }

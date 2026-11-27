@@ -8,7 +8,6 @@ pub struct Source {
     /// Directory of the source file, for resolving relative image paths.
     pub base_dir: Option<PathBuf>,
     /// The file it was read from; `None` for stdin.
-    #[cfg_attr(not(feature = "annotations"), allow(dead_code))]
     pub path: Option<PathBuf>,
 }
 
@@ -56,9 +55,70 @@ pub fn collect(files: Vec<PathBuf>) -> Result<Vec<Source>> {
     Ok(sources)
 }
 
+/// Re-read the content of every file-backed source, leaving stdin sources as
+/// they are. On error nothing is changed, so a file caught mid-write keeps its
+/// previous content.
+pub fn reload(sources: &mut [Source]) -> Result<()> {
+    let contents = sources
+        .iter()
+        .map(|s| match &s.path {
+            Some(path) => std::fs::read_to_string(path)
+                .map(Some)
+                .with_context(|| format!("failed to read '{}'", path.display())),
+            None => Ok(None),
+        })
+        .collect::<Result<Vec<_>>>()?;
+    for (source, content) in sources.iter_mut().zip(contents) {
+        if let Some(content) = content {
+            source.content = content;
+        }
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn reload_picks_up_changed_files() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("doc.md");
+        std::fs::write(&path, "old").unwrap();
+        let mut sources = collect(vec![path.clone()]).unwrap();
+
+        std::fs::write(&path, "new").unwrap();
+        reload(&mut sources).unwrap();
+        assert_eq!(sources[0].content, "new");
+    }
+
+    #[test]
+    fn reload_keeps_stdin_sources() {
+        let mut sources = vec![Source {
+            name: "<stdin>".into(),
+            content: "piped".into(),
+            base_dir: None,
+            path: None,
+        }];
+        reload(&mut sources).unwrap();
+        assert_eq!(sources[0].content, "piped");
+    }
+
+    #[test]
+    fn reload_failure_changes_nothing() {
+        let dir = tempfile::tempdir().unwrap();
+        let a = dir.path().join("a.md");
+        let b = dir.path().join("b.md");
+        std::fs::write(&a, "A").unwrap();
+        std::fs::write(&b, "B").unwrap();
+        let mut sources = collect(vec![a.clone(), b.clone()]).unwrap();
+
+        std::fs::write(&a, "A2").unwrap();
+        std::fs::remove_file(&b).unwrap();
+        assert!(reload(&mut sources).is_err());
+        assert_eq!(sources[0].content, "A");
+        assert_eq!(sources[1].content, "B");
+    }
 
     #[test]
     fn collect_reads_file_with_name_and_base_dir() {

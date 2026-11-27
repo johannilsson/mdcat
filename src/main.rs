@@ -8,6 +8,7 @@ mod input;
 mod pager;
 mod render;
 mod terminal;
+mod watch;
 
 #[derive(Parser)]
 #[command(
@@ -113,7 +114,15 @@ fn main() -> Result<()> {
 }
 
 fn run(files: Vec<PathBuf>, config: render::Config, use_pager: bool) -> Result<()> {
-    let sources = input::collect(files)?;
+    let mut sources = input::collect(files)?;
+
+    // Keep a paged view in step with its files, and with `--annotations`
+    // with Folio's sidecars too.
+    #[cfg(feature = "annotations")]
+    let sidecars = config.annotations;
+    #[cfg(not(feature = "annotations"))]
+    let sidecars = false;
+    let mut watcher = use_pager.then(|| watch::Watcher::for_sources(&sources, sidecars)).flatten();
 
     let protocol = terminal::detect_image_protocol(config.image_protocol.as_deref());
 
@@ -133,13 +142,25 @@ fn run(files: Vec<PathBuf>, config: render::Config, use_pager: bool) -> Result<(
         };
         let rendered = render::render_all(&sources, &render_config)?;
         let doc = render::build_kitty_document(&rendered, &store.borrow());
+        // Each refresh renders into a fresh store, as image ids restart at 1.
+        let mut refresh = || {
+            if !watcher.as_mut()?.changed() {
+                return None;
+            }
+            input::reload(&mut sources).ok()?;
+            let store = Rc::new(RefCell::new(render::KittyImageStore::new()));
+            let config = render::Config { kitty_store: Some(Rc::clone(&store)), ..render_config.clone() };
+            let rendered = render::render_all(&sources, &config).ok()?;
+            let doc = render::build_kitty_document(&rendered, &store.borrow());
+            Some(doc)
+        };
         let opts = kitty_pager::PagerOptions {
             term_width: terminal::width(),
             term_height: terminal::height(),
             cell_pixel_width: terminal::cell_pixel_width(),
             cell_pixel_height: terminal::cell_pixel_height(),
         };
-        return kitty_pager::page(doc, opts);
+        return kitty_pager::page_with_refresh(doc, opts, &mut refresh);
     }
 
     // The minus pager only handles CSI sequences; Kitty APC and iTerm2 OSC
@@ -163,7 +184,15 @@ fn run(files: Vec<PathBuf>, config: render::Config, use_pager: bool) -> Result<(
 
     let rendered = render::render_all(&sources, &render_config)?;
 
-    if use_pager {
+    if let (true, Some(mut watcher)) = (use_pager, watcher) {
+        pager::show_live(rendered, || {
+            if !watcher.changed() {
+                return None;
+            }
+            input::reload(&mut sources).ok()?;
+            render::render_all(&sources, &render_config).ok()
+        })
+    } else if use_pager {
         pager::show(rendered)
     } else {
         print!("{}", rendered);
