@@ -11,6 +11,10 @@ pub fn osc8_link(url: &str, label: &str) -> String {
 /// text already is the URL (autolinks such as `<https://x.com>` or
 /// `<me@x.com>`), where repeating it would only add noise.
 pub fn osc8_link_for(url: &str, label: &str, plain_label: &str) -> String {
+    // A link with no destination (`[text]()`) has nothing to open or show.
+    if url.is_empty() {
+        return label.to_string();
+    }
     let same = plain_label == url || url.strip_prefix("mailto:") == Some(plain_label);
     if same {
         format!("\x1b]8;;{url}\x1b\\{label}\x1b]8;;\x1b\\")
@@ -34,6 +38,11 @@ mod tests {
         let s = osc8_link_for("http://a", "http://a", "http://a");
         assert!(!s.contains('→'));
         assert!(s.contains("\x1b]8;;http://a\x1b\\http://a\x1b]8;;\x1b\\"));
+    }
+
+    #[test]
+    fn empty_url_renders_label_only() {
+        assert_eq!(osc8_link_for("", "text", "text"), "text");
     }
 
     #[test]
