@@ -324,17 +324,20 @@ fn render_inline<'a>(
             drop(data);
             let mut alt = String::new();
             collect_text(node, &mut alt);
+            // Without alt text the placeholder would read "[image: ]" (and wrap
+            // mid-bracket); show the URL instead so it still says what is missing.
+            let placeholder = if alt.trim().is_empty() { url.clone() } else { alt.clone() };
 
             if config.images {
                 match render_image(&url, &alt, base_dir, config) {
                     Ok(img_str) => output.push_str(&img_str),
                     Err(e) => {
                         eprintln!("mdcat: image render failed ({url}): {e}");
-                        output.push_str(&format!("\x1b[2m[image: {alt}]\x1b[0m"));
+                        output.push_str(&format!("\x1b[2m[image: {placeholder}]\x1b[0m"));
                     }
                 }
             } else {
-                output.push_str(&format!("\x1b[2m[image: {alt}]\x1b[0m"));
+                output.push_str(&format!("\x1b[2m[image: {placeholder}]\x1b[0m"));
             }
         }
 
@@ -924,6 +927,19 @@ mod tests {
         let top = result.lines().find(|l| l.contains('┌')).expect("top border");
         let bottom = result.lines().find(|l| l.contains('└')).expect("bottom border");
         (visible_len(top), visible_len(bottom))
+    }
+
+    #[test]
+    fn image_without_alt_text_shows_url_placeholder() {
+        let result = render_document("![](pic.png)\n", None, &test_config(80)).unwrap();
+        assert!(result.contains("[image: pic.png]"), "got: {result:?}");
+        assert!(!result.contains("[image: ]"), "got: {result:?}");
+    }
+
+    #[test]
+    fn image_with_alt_text_keeps_alt_placeholder() {
+        let result = render_document("![a cat](pic.png)\n", None, &test_config(80)).unwrap();
+        assert!(result.contains("[image: a cat]"), "got: {result:?}");
     }
 
     #[test]
